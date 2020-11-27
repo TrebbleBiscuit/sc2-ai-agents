@@ -6,6 +6,8 @@ from sc2.player import Bot, Computer
 from sc2.unit import Unit
 from sc2.units import Units
 from sc2.position import Point2, Point3
+import cv2
+import numpy as np
 
 ###############################
 ### Deckard by Erik Nielsen ###
@@ -136,6 +138,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         await self.ability_stim()
         await self.ability_interference_matrix()
         await self.raise_lower_depots()
+        await self.intel()
 
 
 
@@ -854,6 +857,64 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         for n in range(len(list(sorted_expo_locations))):
             self._client.debug_text_world(str(n), Point3((list(sorted_expo_locations)[n].x, list(sorted_expo_locations)[n].y, self.get_terrain_z_height(list(sorted_expo_locations)[n]))), size=22)
         """
+
+    async def intel(self):
+        # for game_info: https://github.com/Dentosal/python-sc2/blob/master/sc2/game_info.py#L162
+        print(self.game_info.map_size)
+        # flip around. It's y, x when you're dealing with an array.
+
+        game_data = np.zeros((self.game_info.map_size[1], self.game_info.map_size[0], 3), np.uint8)
+
+        draw_dict = {
+                     SUPPLYDEPOT: [2, (20, 200, 0)],
+                     SUPPLYDEPOTLOWERED: [2, (20, 200, 0)],
+                     SCV: [1, (55, 200, 0)],
+                     REFINERY: [2, (55, 200, 0)],
+                     BARRACKS: [3, (200, 140, 0)],
+                     ENGINEERINGBAY: [3, (150, 150, 0)],
+                     STARPORT: [3, (200, 140, 0)],
+                     FACTORY: [3, (215, 155, 0)],
+                     MARINE: [1, (255, 100, 0)],
+                     MARAUDER: [1, (200, 100, 0)],
+                     MEDIVAC: [1, (255, 255, 200)],
+                     RAVEN: [1, (150, 150, 50)],
+                    }
+
+        for unit_type in draw_dict:
+            for unit in self.units(unit_type):
+                pos = unit.position
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), draw_dict[unit_type][0], draw_dict[unit_type][1], -1)
+            for structure in self.structures(unit_type):
+                pos = structure.position
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), draw_dict[unit_type][0], draw_dict[unit_type][1], -1)
+        
+        for townhall in self.townhalls:
+            cv2.circle(game_data, (int(townhall.position[0]), int(townhall.position[1])), 4, (0, 255, 0), -1)  # BGR
+        #for rax in self.units(BARRACKS):
+        #    cv2.circle(game_data, (int(rax.position[0]), int(rax.position[1])), 6, (0, 255, 0), -1)  # BGR
+
+        main_base_names = ["nexus", "commandcenter", "hatchery"]
+        for enemy_building in self.enemy_structures:
+            pos = enemy_building.position
+            if enemy_building.name.lower() not in main_base_names:
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3, (200, 50, 212), -1)
+        for enemy_building in self.enemy_structures:
+            pos = enemy_building.position
+            if enemy_building.name.lower() in main_base_names:
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 4, (0, 0, 255), -1)
+        for enemy_unit in self.enemy_units:
+            pos = enemy_unit.position
+            cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1, (0, 0, 200), -1)
+
+        # flip horizontally to make our final fix in visual representation:
+        flipped = cv2.flip(game_data, 0)
+        resized = cv2.resize(flipped, dsize=None, fx=2, fy=2)
+
+        cv2.imshow('Intel', resized)
+        cv2.waitKey(1)
+
+    def on_end(self, result):
+        print("Game ended.")
 
     def on_end(self, result):  # Do things here after the game ends
         print("Game ended.")
