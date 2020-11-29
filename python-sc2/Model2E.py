@@ -143,7 +143,9 @@ class Model2E(sc2.BotAI):
                 for w in worker_canidates:
                     if w != worker_canidates.furthest_to(self.enemy_start_locations[0].position):
                         w.attack(self.get_attack_target())
-            for unit in forces.idle: unit.attack(self.get_attack_target())
+            for unit in forces.idle:
+                unit.attack(self.get_attack_target())
+            await self.stutter_step()
     
     async def build_depots(self):
         if not self.already_pending(UnitTypeId.SUPPLYDEPOT) and self.supply_left < 7 and self.supply_cap < 200:
@@ -162,10 +164,14 @@ class Model2E(sc2.BotAI):
             depot(AbilityId.MORPH_SUPPLYDEPOT_LOWER)
     
     async def stutter_step(self):
-        pass
+        for u in self.units(UnitTypeId.MARINE):
+            if self.enemy_units:
+                closest_enemy = self.enemy_units.closest_to(u)
+                if u.distance_to(closest_enemy) < 6 and u.weapon_cooldown > 0:
+                    u.move(u.position.towards(closest_enemy.position, -u.distance_to_weapon_ready))
         # away from ATTACKING units with less range (zealots, lings, workers)
         # towards units with more range (stalkers)
-        #
+        # 
         # marine.distance_to_weapon_ready
     
     async def intel(self):
@@ -174,7 +180,7 @@ class Model2E(sc2.BotAI):
         # flip around. It's y, x when you're dealing with an array.
 
         game_data = np.zeros((self.game_info.map_size[1], self.game_info.map_size[0], 3), np.uint8)
-
+        """
         draw_dict = {
                      SUPPLYDEPOT: [2, (20, 200, 0)],
                      SUPPLYDEPOTLOWERED: [2, (20, 200, 0)],
@@ -197,21 +203,33 @@ class Model2E(sc2.BotAI):
             for structure in self.structures(unit_type):
                 pos = structure.position
                 cv2.circle(game_data, (int(pos[0]), int(pos[1])), draw_dict[unit_type][0], draw_dict[unit_type][1], -1)
-        
+        """
+
         for townhall in self.townhalls:
-            cv2.circle(game_data, (int(townhall.position[0]), int(townhall.position[1])), 4, (0, 255, 0), -1)  # BGR
+            cv2.circle(game_data, (int(townhall.position[0]), int(townhall.position[1])), 4, (255, 20, 0), -1)  # BGR
+        for structure in self.structures:
+            if structure not in self.townhalls:
+                cv2.circle(game_data, (int(structure.position[0]), int(structure.position[1])), 3, (180, 0, 0), -1)  # BGR
         #for rax in self.units(BARRACKS):
         #    cv2.circle(game_data, (int(rax.position[0]), int(rax.position[1])), 6, (0, 255, 0), -1)  # BGR
+
+        for w in self.workers:
+            pos = w.position
+            cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1, (55, 100, 0), -1)
+        for u in self.units:
+            if u not in self.workers:
+                pos = u.position
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1, (150, 100, 50), -1)
 
         main_base_names = ["nexus", "commandcenter", "hatchery"]
         for enemy_building in self.enemy_structures:
             pos = enemy_building.position
             if enemy_building.name.lower() not in main_base_names:
-                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3, (200, 50, 212), -1)
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3, (50, 50, 120), -1)
         for enemy_building in self.enemy_structures:
             pos = enemy_building.position
             if enemy_building.name.lower() in main_base_names:
-                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 4, (0, 0, 255), -1)
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 4, (50, 50, 255), -1)
         for enemy_unit in self.enemy_units:
             pos = enemy_unit.position
             cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1, (0, 0, 200), -1)
@@ -219,7 +237,6 @@ class Model2E(sc2.BotAI):
         # flip horizontally to make our final fix in visual representation:
         flipped = cv2.flip(game_data, 0)
         resized = cv2.resize(flipped, dsize=None, fx=3, fy=3)
-
         cv2.imshow('Intel', resized)
         cv2.waitKey(1)
 
