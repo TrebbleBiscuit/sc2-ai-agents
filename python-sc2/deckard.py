@@ -2,12 +2,21 @@ from asyncio import sleep
 import sc2
 from sc2 import Race, Difficulty
 from sc2.constants import *
+from sc2.ids.unit_typeid import *
+from sc2.ids.ability_id import *
 from sc2.player import Bot, Computer
 from sc2.unit import Unit
 from sc2.units import Units
 from sc2.position import Point2, Point3
 import cv2
 import numpy as np
+
+def main():
+    sc2.run_game(
+        sc2.maps.get("CatalystLE"),  # select map
+        [Bot(Race.Terran, DeckardBot()), Computer(Race.Random, Difficulty.CheatMoney)],  # select opponent race and difficulty
+        realtime=False,  # if False, render as fast as possible
+    )
 
 ###############################
 ### Deckard by Erik Nielsen ###
@@ -64,6 +73,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             # If you prefer to have the barracks in the middle without room for addons, use the following instead
             # self.barracks_placement_position = self.main_base_ramp.barracks_in_middle
             self.sorted_expo_locations = self.start_location.sort_by_distance(self.expansion_locations_list)  # used in get_rally_point
+            for w in self.workers:  # split workers
+                w.gather(self.mineral_field.closest_to(w))
 
         if iteration == 5:
             await self.chat_send(" Deckard. B26354. GLHF.")
@@ -72,21 +83,21 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         if self.supply_workers < 10 and not self.townhalls:
             if not self.willsurrender:
                 if not self.basetrade:
-                    await self.chat_send("Normally I would surrender now, but this looks like it could be a base trade.")
+                    await self.chat_send("That hurt.")
                     self.basetrade = True
             else:
                 self.surrendernow = True
                 if self.chatty:
                     await self.chat_send("I've seen things you people wouldn't believe.")
-                    await sleep(2)
+                    await sleep(1)
                     await self.chat_send("Attack ships on fire off the shoulder of Orion.")
-                    await sleep(2)
+                    await sleep(1.5)
                     await self.chat_send("I watched C-beams glitter in the darkness at Tannhäuser Gate.")
-                    await sleep(2.5)
+                    await sleep(2)
                     await self.chat_send("All those moments will be lost in time like tears in rain.")
-                    await sleep(3)
+                    await sleep(1.5)
                     await self.chat_send("Time to die.")
-                    await sleep(4)
+                    await sleep(3)
                 else:
                     await self.chat_send("GG")
                     await sleep(0.5)
@@ -186,6 +197,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             self.willsurrender = False
 
         if self.forces and iteration % 4 == 0:
+            # follow the army around at a distance
+            # unit.attack really just does a scan-move (like when you a-move a medivac it stays back to heal)
+            # ravens will totally just run in though so keep those well back
             for unit in self.flier: unit.attack(self.forces.closest_to(self.enemy_start_locations[0]).position.towards(self.start_location, 4))
             for unit in medivacs: unit.attack(self.forces.closest_to(self.enemy_start_locations[0]).position.towards(self.start_location, 7))
             for unit in ravens: unit.attack(self.forces.closest_to(self.enemy_start_locations[0]).position.towards(self.start_location, 8))
@@ -235,7 +249,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             if not self.announced_efficiency and self.attack_length + 50 < self.get_attack_length():
                 await self.chat_send("Come on. I'm right here, but you've got to shoot straight.")
                 self.announced_efficiency = True
-            if iteration % 3 == 0:
+            if iteration % 5 == 0:
                 for unit in self.forces:
                     unit.attack(self.get_base_target())
         # Defend
@@ -622,15 +636,15 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 await self.chat_send("All right, I'm going to ask you a series of questions.")
             elif iteration == 35:
                 await self.chat_send("Just relax and answer them as simply as you can.")
-            elif iteration == 70:
+            elif iteration == 170:
                 await self.chat_send("It's your birthday. Someone gives you a calfskin wallet.")
-            elif iteration == 110:
+            elif iteration == 210:
                 await self.chat_send("You've got a little boy. He shows you his butterfly collection plus the killing jar.")
-            elif iteration == 150:
+            elif iteration == 250:
                 await self.chat_send("You're watching television. Suddenly you realize there's a wasp crawling on your arm.")
-            elif iteration == 190:
+            elif iteration == 290:
                 await self.chat_send("You're reading a magazine. You come across a full page nude photo of a girl.")
-            elif iteration == 200:
+            elif iteration == 300:
                 await self.chat_send("You show it to your husband. He likes it so much he hangs it on your bedroom wall.")
 
     async def train_workers(self):
@@ -794,6 +808,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         
     def get_base_target(self):
         """ Select an enemy target the units should attack. """
+        # i think this whole top part is depreciated because of the hunt function and now it'll only return enemy start locations position
+        # TODO: want to eventually have it return other places like the most recently taken base or somewhere after the army has been drawn away
         if self.units and min([u.position.distance_to(self.enemy_start_locations[0]) for u in self.units]) < 5:
             if self.enemy_structures: return self.enemy_structures.random.position
             return self.mineral_field.random.position
@@ -860,7 +876,6 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 
     async def intel(self):
         # for game_info: https://github.com/Dentosal/python-sc2/blob/master/sc2/game_info.py#L162
-        print(self.game_info.map_size)
         # flip around. It's y, x when you're dealing with an array.
 
         game_data = np.zeros((self.game_info.map_size[1], self.game_info.map_size[0], 3), np.uint8)
@@ -913,20 +928,11 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         cv2.imshow('Intel', resized)
         cv2.waitKey(1)
 
-    def on_end(self, result):
-        print("Game ended.")
-
     def on_end(self, result):  # Do things here after the game ends
         print("Game ended.")
         print("'surrendernow' was " + str(self.surrendernow))
 
 
-def main():
-    sc2.run_game(
-        sc2.maps.get("CatalystLE"),
-        [Bot(Race.Terran, DeckardBot()), Computer(Race.Protoss, Difficulty.CheatMoney)],
-        realtime=False,
-    )
 
 
 if __name__ == "__main__":

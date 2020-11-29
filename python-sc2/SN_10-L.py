@@ -1,6 +1,8 @@
 import sc2
 from sc2 import Race, Difficulty
 from sc2.constants import *
+from sc2.ids.unit_typeid import *
+from sc2.ids.ability_id import *
 from sc2.player import Bot, Computer
 from sc2.unit import Unit
 from sc2.units import Units
@@ -21,11 +23,12 @@ class SN_10L(sc2.BotAI):  # give it a cool name tho
     async def on_step(self, iteration):
         if iteration == 0:
             self.sorted_expo_locations = self.start_location.sort_by_distance(self.expansion_locations_list)
+            for w in self.workers:  # split workers
+                w.gather(self.mineral_field.closest_to(w))
         
         if iteration == 10: await self.chat_send("SN_10-L Initialized. GLHF.")
         
         self.total_worker_supply = self.supply_workers + self.already_pending(UnitTypeId.DRONE)
-
 
         await self.distribute_workers()
         await self.ability_inject()

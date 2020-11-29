@@ -1,10 +1,15 @@
 import sc2
 from sc2 import Race, Difficulty
 from sc2.constants import *
+from sc2.ids.unit_typeid import *
+from sc2.ids.ability_id import *
 from sc2.player import Bot, Computer
 from sc2.unit import Unit
 from sc2.units import Units
 from sc2.position import Point2, Point3
+
+from s2clientprotocol import raw_pb2 as raw_pb
+from s2clientprotocol import sc2api_pb2 as sc_pb
 
 ###############################
 ### Nexus-7 by Erik Nielsen ###
@@ -18,6 +23,8 @@ class Nexus7(sc2.BotAI):
     async def on_step(self, iteration):
         if iteration == 0:
             self.sorted_expo_locations = self.start_location.sort_by_distance(self.expansion_locations_list)
+            for w in self.workers:  # split workers
+                w.gather(self.mineral_field.closest_to(w))
         
         if iteration == 7: await self.chat_send("Nexus-7. GLHF.")
         
@@ -28,6 +35,7 @@ class Nexus7(sc2.BotAI):
         await self.army_movement(iteration)
         await self.ability_bilnk()
         await self.ability_chronoboost()
+        await self.morph_arcons()
 
         # Macro
         await self.train_workers()
@@ -46,9 +54,9 @@ class Nexus7(sc2.BotAI):
         await self.warp_in_robo_units()
     
     async def army_movement(self, iteration):
-        forces: Units = self.units.of_type({STALKER, ZEALOT, IMMORTAL})
+        forces: Units = self.units.of_type({STALKER, ZEALOT, IMMORTAL, ARCHON, HIGHTEMPLAR})
         #if self.already_pending_upgrade(UpgradeId.BLINKTECH) == 1:
-        if self.time > 510:  # 510 sec = 8:30
+        if self.time > 510 and self.time < 600 or self.time > 780:  # 510 sec = 8:30, 780 sec = 13:00
             for unit in forces.idle: unit.attack(self.enemy_start_locations[0].position)
         elif iteration % 6 == 0:
             if self.enemy_units:
@@ -110,6 +118,13 @@ class Nexus7(sc2.BotAI):
                         print("can't place zealot")
                         return
                     warpgate.warp_in(UnitTypeId.ZEALOT, placement)
+            if (
+                AbilityId.WARPGATETRAIN_HIGHTEMPLAR in abilities
+                and self.vespene > 400
+            ):
+                target = self.structures(UnitTypeId.PYLON).ready.random.position.towards(self.game_info.map_center, 4)
+                placement = await self.find_placement(AbilityId.WARPGATETRAIN_HIGHTEMPLAR, target, placement_step=1)
+                if placement: warpgate.warp_in(UnitTypeId.HIGHTEMPLAR, placement)
             if AbilityId.WARPGATETRAIN_STALKER in abilities:
                 target = self.structures(UnitTypeId.PYLON).ready.random.position.towards(self.game_info.map_center, 4)
                 placement = await self.find_placement(AbilityId.WARPGATETRAIN_STALKER, target, placement_step=1)
@@ -130,9 +145,9 @@ class Nexus7(sc2.BotAI):
     async def construct_additional_pylons(self):
         if (
             self.supply_left < 5 and self.already_pending(UnitTypeId.PYLON) == 0
-            or self.time > 120 and self.supply_left < 2 and self.already_pending(UnitTypeId.PYLON) == 1
+            or self.time > 150 and self.supply_left < 2 and self.already_pending(UnitTypeId.PYLON) == 1
         ):
-            if self.can_afford(UnitTypeId.PYLON):
+            if self.can_afford(UnitTypeId.PYLON) and self.townhalls.amount > 0:
                 await self.build(UnitTypeId.PYLON, near=self.townhalls.ready.random.position.towards(self.game_info.map_center, 8))
 
     async def build_assimilators(self):
@@ -182,6 +197,13 @@ class Nexus7(sc2.BotAI):
                 and self.can_afford(UnitTypeId.ROBOTICSFACILITY)
             ):
                 await self.build(UnitTypeId.ROBOTICSFACILITY, near=pylon)
+            elif (
+                self.structures(UnitTypeId.TEMPLARARCHIVE).ready.amount + self.already_pending(UnitTypeId.TEMPLARARCHIVE) < 1
+                and self.structures(UnitTypeId.TWILIGHTCOUNCIL).ready
+                and self.can_afford(UnitTypeId.TEMPLARARCHIVE)
+                and self.townhalls.amount >= 3
+            ):  # Templar Archives
+                await self.build(UnitTypeId.TEMPLARARCHIVE, near=pylon)
 
     async def expand(self):
         if (
@@ -248,6 +270,21 @@ class Nexus7(sc2.BotAI):
                 and self.can_afford(AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL3)
             ):
                 forge.research(UpgradeId.PROTOSSGROUNDARMORSLEVEL3)
+    
+    async def morph_arcons(self):
+        if self.units(UnitTypeId.HIGHTEMPLAR).ready.amount >= 2:
+            ht1 = self.units(UnitTypeId.HIGHTEMPLAR).ready.random
+            ht2 = next((ht for ht in self.units(UnitTypeId.HIGHTEMPLAR).ready if ht.tag != ht1.tag), None)
+            if ht2:
+                command = raw_pb.ActionRawUnitCommand(
+                        ability_id=AbilityId.MORPH_ARCHON.value,
+                        unit_tags=[ht1.tag, ht2.tag],
+                        queue_command=False
+                    )
+                action = raw_pb.ActionRaw(unit_command=command)
+                await self._client._execute(action=sc_pb.RequestAction(
+                        actions=[sc_pb.Action(action_raw=action)]
+                    ))
 
 
     def on_end(self, result):
@@ -272,6 +309,7 @@ class Nexus7(sc2.BotAI):
             elif th == 3: return 5
             elif th == 4: return 7
             elif th == 5: return 10
+            elif th > 5 and self.minerals > 1500: return 15
             else: return 12
         elif building == "FORGE":
             if th >= 3 and self.townhalls.ready.amount >= 3: return 2
@@ -280,6 +318,7 @@ class Nexus7(sc2.BotAI):
             if th < 2: return th
             elif th == 2 and self.townhalls.ready.amount == 2: return 3
             elif th == 2: return 2
+            elif self.minerals > 1000 and self.vespene < 400: return th*2
             else: return th + 1
         elif building == "ROBOTICS FACILITY":
             if not self.structures(UnitTypeId.TWILIGHTCOUNCIL).ready: return 0

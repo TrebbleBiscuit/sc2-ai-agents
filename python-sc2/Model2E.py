@@ -1,6 +1,8 @@
 import sc2
 from sc2 import Race, Difficulty
 from sc2.constants import *
+from sc2.ids.unit_typeid import *
+from sc2.ids.ability_id import *
 from sc2.player import Bot, Computer
 from sc2.unit import Unit
 from sc2.units import Units
@@ -22,20 +24,28 @@ class Model2E(sc2.BotAI):
         self.game_stage = "Opening"
         self.opening_step = 0
         self.allin = False
+        self.killed_main = False
 
     async def on_step(self, iteration):
         if iteration == 0:
             self.sorted_expo_locations = self.start_location.sort_by_distance(self.expansion_locations_list)
+            for w in self.workers:  # split workers
+                w.gather(self.mineral_field.closest_to(w))
         
         if iteration == 10: await self.chat_send("2E Initialized. GLHF.")
         
         if self.game_stage == "Opening":
             await self.opening_build()
+            for w in self.workers.idle:
+                if w.distance_to(self.townhalls.first) < 15:
+                    w.gather(self.mineral_field.closest_to(w))
         else:
-            await self.distribute_workers()  # do not do during opening (looks for idle SCVs)
+            # await self.distribute_workers()  # do not do during opening (looks for idle SCVs)
             await self.army_movement(iteration)
             await self.build_depots()
+            await self.make_barracks()
         await self.train_marines()  # do even during opening
+        await self.lower_depots()
         await self.intel()
     
 
@@ -43,20 +53,13 @@ class Model2E(sc2.BotAI):
 
         # TODO: deal with idle SCV that finishes 1st depot
 
-        # Reassign workers if dead
-        print(f"opening step: {self.opening_step}")
-        try: self.placement_position
-        except AttributeError:
-            self.placement_position = self.townhalls.first.position
-        self._client.debug_text_world("PLACEMENT_POSITION", Point3((self.placement_position.x, self.placement_position.y, self.get_terrain_z_height(self.placement_position))), size=12)
-
         if self.opening_step == 0:  # make SCV, send out SCV
             self.townhalls.first.train(UnitTypeId.SCV)
             self.worker1 = self.workers.gathering.closest_to(self.enemy_start_locations[0].position)
             self.worker1.move(self.enemy_start_locations[0].position)
             self.opening_step += 1
         elif self.opening_step == 1:  # send out 2nd SCV 
-            if self.time > 5:
+            if self.time > 7:
                 self.worker2 = self.workers.gathering.closest_to(self.enemy_start_locations[0].position)
                 self.worker2.move(self.enemy_start_locations[0].position)
                 self.opening_step += 1
@@ -67,7 +70,7 @@ class Model2E(sc2.BotAI):
                 if self.placement_position:
                     if this_worker.build(UnitTypeId.SUPPLYDEPOT, self.placement_position): self.opening_step += 1
         elif self.opening_step == 3:  # send out 3nd SCV
-            if self.time > 15:
+            if self.time > 18:
                 self.worker3 = self.workers.gathering.closest_to(self.enemy_start_locations[0].position)
                 self.worker3.move(self.enemy_start_locations[0].position)
                 self.opening_step += 1
@@ -105,7 +108,9 @@ class Model2E(sc2.BotAI):
         # 1st barracks should finish now, one marine should start
         elif self.opening_step == 8:  # Make fourth rax
             if self.can_afford(UnitTypeId.BARRACKS):
-                worker_canidates = self.workers.filter(lambda worker: not worker.is_constructing_scv)
+                worker_canidates = self.workers.filter(lambda worker: not worker.is_constructing_scv and worker.distance_to(self.enemy_start_locations[0].position) < 50)
+                if not worker_canidates:
+                    return
                 this_worker = worker_canidates.closest_to(self.enemy_start_locations[0].position)
                 newpp = await self.find_placement(UnitTypeId.BARRACKS, near=this_worker.position, placement_step=1)
                 if newpp:
@@ -113,12 +118,12 @@ class Model2E(sc2.BotAI):
                     if this_worker.build(UnitTypeId.BARRACKS, self.placement_position):
                         self.opening_step += 1
         elif self.opening_step == 9:  # Make second depot
-            worker_canidates = self.workers.filter(lambda worker: not worker.is_constructing_scv)
-            this_worker = worker_canidates.closest_to(self.enemy_start_locations[0].position)
             if self.can_afford(UnitTypeId.SUPPLYDEPOT):
-                placement_position = await self.find_placement(UnitTypeId.BARRACKS, near=this_worker.position.towards(self.game_info.map_center, 3), placement_step=1)
-                if placement_position:
-                    self.worker2.build(UnitTypeId.SUPPLYDEPOT, placement_position)
+                worker_canidates = self.workers.filter(lambda worker: not worker.is_constructing_scv)
+                this_worker = worker_canidates.closest_to(self.enemy_start_locations[0].position)
+                place = await self.find_placement(UnitTypeId.SUPPLYDEPOT, near=this_worker.position.towards(self.game_info.map_center, 4), placement_step=1)
+                if place:
+                    this_worker.build(UnitTypeId.SUPPLYDEPOT, place)
                     self.opening_step += 1
         elif self.opening_step == 10:
             self.game_stage = "Brrr"
@@ -134,11 +139,27 @@ class Model2E(sc2.BotAI):
             if not self.allin:
                 self.allin = True
                 await self.chat_send("Sending kill signal to rogue process")
-            for unit in forces.idle: unit.attack(self.enemy_start_locations[0].position)
+                worker_canidates = self.workers.filter(lambda worker: not worker.is_constructing_scv and worker.distance_to(self.enemy_start_locations[0].position) < 50)
+                for w in worker_canidates:
+                    if w != worker_canidates.furthest_to(self.enemy_start_locations[0].position):
+                        w.attack(self.get_attack_target())
+            for unit in forces.idle: unit.attack(self.get_attack_target())
     
     async def build_depots(self):
         if not self.already_pending(UnitTypeId.SUPPLYDEPOT) and self.supply_left < 7 and self.supply_cap < 200:
             await self.build(UnitTypeId.SUPPLYDEPOT, near=self.townhalls.first.position.towards(self.game_info.map_center, 6))
+    
+    async def make_barracks(self):
+        if self.minerals > 350 and self.supply_left > 0:
+            worker_canidates = self.workers.filter(lambda worker: not worker.is_attacking and not worker.is_constructing_scv)
+            if not worker_canidates: return
+            this_worker = worker_canidates.closest_to(self.placement_position)
+            place = await self.find_placement(UnitTypeId.BARRACKS, near=this_worker.position.towards(self.placement_position), placement_step=1)
+            if place: this_worker.build(UnitTypeId.BARRACKS, place)
+
+    async def lower_depots(self):
+        for depot in self.structures(UnitTypeId.SUPPLYDEPOT).ready:
+            depot(AbilityId.MORPH_SUPPLYDEPOT_LOWER)
     
     async def stutter_step(self):
         pass
@@ -205,7 +226,15 @@ class Model2E(sc2.BotAI):
     def on_end(self, result):
         print("Game ended.")
 
-
+    def get_attack_target(self):
+        """ Select an enemy target the units should attack. """
+        if min([u.position.distance_to(self.enemy_start_locations[0]) for u in self.units]) < 5:
+            self.killed_main = True
+        if self.killed_main:
+            if self.enemy_structures: return self.enemy_structures.random.position
+            return self.mineral_field.random.position
+        else:
+            return self.enemy_start_locations[0].position
 
 
 def main():
