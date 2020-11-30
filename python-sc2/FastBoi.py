@@ -14,22 +14,20 @@ def main():
     Make sure whatever map you use is present in your "Username/Documents/Starcraft II/Maps" folder!
     replace Terran and CompetitiveBot() with whatever race and name your bot has
     replace Zerg and Medium with whatever race and difficulty you want to play against
-
-    Replays are saved in: C:\Users\<Username>\Documents\StarCraft II\Replays\Multiplayer
     """
     sc2.run_game(
         sc2.maps.get("CatalystLE"),
-        [Bot(Race.Terran, CompetitiveBot()), Computer(Race.Zerg, Difficulty.Medium)],
+        [Bot(Race.Terran, FastBoi()), Computer(Race.Zerg, Difficulty.Medium)],
         realtime=True,  # Set to True to watch in real time, False to play through as fast as possible
     )
 
-####################################
-### Bot Template by Erik Nielsen ###
-###   A python-sc2 AI Template   ###
-####################################
+###############################
+### FastBoi by Erik Nielsen ###
+###    A Starcraft II AI    ###
+###############################
 
 
-class CompetitiveBot(sc2.BotAI):  # give it a cool name tho
+class FastBoi(sc2.BotAI):  # give it a cool name tho
     async def on_start(self):
         print("Game started")
         # Do things here JUST BEFORE the game starts 
@@ -43,13 +41,16 @@ class CompetitiveBot(sc2.BotAI):  # give it a cool name tho
         it's a float, so don't use `if self.time == 30`, instead do `if self.time > 30`
         """
         if iteration == 0:  # runs immediately after the game begins
-            await self.split_workers()
+            #await self.split_workers()
+            for w in self.workers:
+                w.attack(self.enemy_start_locations[0].position)
             
         if iteration == 10:  # runs exactly once
             await self.chat_send("(glhf)")
         
         if iteration % 10 == 0:  # run less frequently for performance reasons
-            await self.distribute_workers()  # automagically distribute workers between bases and send idle workers to mine
+            pass
+            #await self.distribute_workers()  # automagically distribute workers between bases and send idle workers to mine
 
     async def split_workers(self):
         # order every worker to gather from the mineral field closest to them

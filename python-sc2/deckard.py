@@ -23,16 +23,27 @@ def main():
 ###    A Starcraft II AI    ###
 ###############################
 
+"""
+    Big TODO list
+
+# Build a reaper to scout
+# Make a scouting function! Store the information somehow
+# Make functions return meaningful values based on their outcome
+# Make the money spending machine brr more efficiently
+# Manage optimal bases 
+# Write comments for functions
+# Clean up debug info panel, plan it out better
+"""
+
 class DeckardBot(sc2.BotAI):  # Do things here before the game starts
     async def on_start(self):
-        self.search_length = 8              # These parameters may be tuned
-        self.attack_downtime = 120          #
-        self.attack_length = 60             #
-        self.attack_norush_period = 480     # 480 (8 min) is a good time
-        self.mineral_gas_ratio = 2          #
+        self.search_length = 15             # These parameters may be tuned
+        self.attack_downtime = 120          # Period from attack end to next attack start (after initial norush period)
+        self.attack_length = 60             # Period from attack start to attack end
+        self.attack_norush_period = 480     # Time until first attack - 480 (8 min) is a good time
+        self.mineral_gas_ratio = 2          # How many minerals are 'worth' 1 gas in value calculations?
         
         self.chatty = True                  # Flavor parameter
-
 
         # The following parameters are controlled by the code. Don't change them here.
         self.announced_attack = False
@@ -59,6 +70,16 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         self.value_killed_vespene_base = self.value_killed_vespene
         self.value_lost_minerals_base = self.value_lost_minerals
         self.value_lost_vespene_base = self.value_lost_vespene
+        self.built_reaper = False
+        self.my_stats = {
+            "workers_lost": 0,
+        }
+        self.opponent_info = {
+            "expansions": [], # stores a list of position objects of expansions keyed to tags i.e. { 1234: (23, 35) }
+            "army_tags_scouted": [], # list of dicts with entries: {"tag": 123, "scoutTime": 15.6, "supply": 2}
+            "army_supply_scouted": 0,
+            "army_supply_visible": 0,
+        }
 
         print("")
         print("Deckard Initialized")
@@ -109,51 +130,43 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         else:
             self.cc: Unit = self.ccs.first
 
-        if iteration % 8 == 0:  # Do less frequently
-            await self.repair_damaged_buildings()
-
+        if iteration % 4 == 0:  # Do less frequently
+            await self.distribute_workers()             # will distribute workers between bases, minerals, and gas geysers efficiently
+        if iteration % 8 == 0:  # Do even less frequently
+            await self.repair_damaged_buildings()       # will send 1 scv to damaged buildings to help repair every time it is run
         if iteration % 30 == 0:  # Do much less frequently
-            await self.finish_constructing_buildings()
+            await self.finish_constructing_buildings()  # will send 1 scv to incomplete, halted building every time it is run
+            await self.handle_scouted_information()
             # This stuff is useful for debugging
-            """
             # self.cc:
-            # Unit(name='CommandCenter', tag=4342153217)
+            ## Unit(name='CommandCenter', tag=4342153217)
             # self.townhalls:
-            # [Unit(name='CommandCenter', tag=4377018369), Unit(name='CommandCenter', tag=4342153217), Unit(name='CommandCenter', tag=4357357569)]
-            """
+            ## [Unit(name='CommandCenter', tag=4377018369), Unit(name='CommandCenter', tag=4342153217), Unit(name='CommandCenter', tag=4357357569)]
 
-        await self.distribute_workers()
-        self.showdebuginfo(iteration)
-        # await self.flavor_chat(iteration)
-        await self.upgrade_command_center()
-        await self.train_workers()
-        await self.expand()
-        await self.build_depots()
-        await self.build_addons()  # should be before unit training so that buildings build addons first
-        await self.train_from_barracks()
-        if (  # If the conditions are met to expand but we haven't yet, save money to do so.
-            self.townhalls.amount >= self.get_ideal_building_count("COMMANDCENTER")
-            or self.already_pending(UnitTypeId.COMMANDCENTER)
-            or self.enemy_units and self.townhalls.amount == 1
-        ):
-            await self.train_from_factory()
-            await self.train_from_starport()
-            await self.build_production()
-            await self.build_upgrade_buildings()
-            await self.build_missile_turrets()
-            await self.research_upgrades()
-            await self.build_refineries()
-        await self.manage_orbital_energy()
-        await self.army_movement(iteration)
-        await self.ability_siege_tanks()
-        await self.ability_stim()
-        await self.ability_interference_matrix()
-        await self.raise_lower_depots()
-        await self.intel()
 
+        self.showdebuginfo(iteration)               # show debug information in-game
+        # await self.flavor_chat(iteration)         # some kind of annoying flavor
+        await self.manage_spending()                # spend money
+        await self.manage_orbital_energy()          # manage orbital energy
+        await self.army_movement(iteration)         # manage non-worker units
+        await self.ability_siege_tanks()            # use siege/unsiege ability
+        await self.ability_stim()                   # use stim ability
+        await self.ability_interference_matrix()    # use interference matrix ability
+        await self.raise_lower_depots()             # use raise/lower ability
+        await self.micro_marines()                  # control marines
+        await self.micro_reaper()                   # TODO: control reaper
+        # await self.scout()                          # TODO: scout
+        # await self.react_to_scouting()              # TODO: store and utilize scouting information
+        await self.intel()                          # display intel visualization
 
 
     async def on_enemy_unit_entered_vision(self, enemyunit):
+        """
+        UNDER CONSTRUCTION
+        if enemyunit.tag not in self.opponent_info["army_tags_scouted"]:
+            self.opponent_info.append{}
+        """
+        
         need_vikings_list = ["Colossus", "Mothership", "Tempest", "Phoenix", "Battlecruiser", "Medivac", "Viper", "Corruptor", "Brood Lord"]
         need_thors_list = ["Mutalisk"]
         if (
@@ -174,9 +187,16 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         if lost and str(lost.type_id) != "UnitTypeId.MULE":
             self.value_lost_minerals += self.calculate_unit_value(lost.type_id).minerals
             self.value_lost_vespene += self.calculate_unit_value(lost.type_id).vespene
+            if str(lost.type_id) == "UnitTypeId.SCV":
+                self.my_stats['workers_lost'] += 1
         if enemylost and str(enemylost.type_id) != "UnitTypeId.MULE":
             self.value_killed_minerals += self.calculate_unit_value(enemylost.type_id).minerals
             self.value_killed_vespene += self.calculate_unit_value(enemylost.type_id).vespene
+            """
+            # UNDER CONSTRUCTION
+            if enemylost.type_id in [HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS]:
+                print("ENEMY LOST TOWNHALL!")
+            """
         
 
 ### Above functions are called by the game, below functions are called by the above functions ###
@@ -235,7 +255,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         # Attack
         elif self.army_mood != "ATTACK" and self.time > self.attack_end_time + self.get_attack_downtime():
         #elif round(self.time) % self.attack_frequency == 0 and self.time > self.attack_norush_period and self.army_mood != "ATTACK":
-            if self.enemy_units.closer_than(60, self.start_location):
+            if self.enemy_units.closer_than(60, self.start_location):  # delay attack if there are enemy units nearby
                 self.attack_end_time += 10
                 return
             if self.chatty and not self.announced_attack:
@@ -245,12 +265,14 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             self.get_attack_length(reset=True)
             self.attack_start_time = self.time
             self.attack_end_time -= 60  # so that the attack and defend cooldowns aren't happening at the same time
+            for unit in self.forces:
+                unit.attack(self.get_base_target())
         elif self.time < self.attack_start_time + self.get_attack_length():
             if not self.announced_efficiency and self.attack_length + 50 < self.get_attack_length():
                 await self.chat_send("Come on. I'm right here, but you've got to shoot straight.")
                 self.announced_efficiency = True
             if iteration % 5 == 0:
-                for unit in self.forces:
+                for unit in self.forces.idle:  # only sends idle forces! 
                     unit.attack(self.get_base_target())
         # Defend
         elif self.time > self.attack_start_time + self.get_attack_length() and self.army_mood != "DEFEND":
@@ -269,14 +291,59 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 if iteration % 12 == 0:
                     for unit in self.forces.idle: unit.attack(self.get_rally_point())
 
+    async def manage_spending(self):
+        """
+        TODO:
+        if cant build addons, don't train units
+        if can't upgrade orbital, don't train workers
+        """
+        await self.upgrade_command_center()
+        await self.train_workers()
+        await self.expand()
+        await self.build_depots()
+        await self.build_addons()  # must be before unit training so that buildings build addons first
+        await self.train_from_barracks()
+        if (  # If the conditions are met to expand but we haven't yet, save money to do so.
+            self.townhalls.amount >= self.get_ideal_building_count("COMMANDCENTER")
+            or self.already_pending(UnitTypeId.COMMANDCENTER)
+            or self.enemy_units and self.townhalls.amount == 1
+        ):
+            await self.train_from_factory()
+            await self.train_from_starport()
+            await self.build_production()
+            await self.build_upgrade_buildings()
+            await self.build_missile_turrets()
+            await self.research_upgrades()
+            await self.build_refineries()
+
+    async def handle_scouted_information(self):
+        enemy_townhalls = self.enemy_structures.filter(lambda x:x.type_id in [HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS])
+        for th in enemy_townhalls:
+            if len(self.opponent_info["expansions"]) > 0 and th.position.closest(self.opponent_info["expansions"]).distance_to(th.position) < 10:
+                continue
+            if th not in self.opponent_info['expansions']:
+                self.opponent_info["expansions"].append(th)
+                print("found a new enemy base!")
+                if th.position in self.expansion_locations_list:
+                    print("expansion is at an expected location")
+                print(self.opponent_info["expansions"])
+                print(self.enemy_start_locations)
+                print(self.sorted_expo_locations)
+                """
+                found a new enemy base!
+                {8754364449: (115.5, 27.5), 4345561089: (144.5, 28.5), 8758689836: (144.5, 28.5)}
+                [(144.5, 28.5)]
+                [(39.5, 139.5), (68.5, 140.5), (48.5, 106.5), (100.5, 139.5), (98.5, 113.5), (53.5, 66.5), (85.5, 54.5), (130.5, 101.5), (140.5, 143.5), (43.5, 24.5), (83.5, 28.5), (135.5, 61.5), (115.5, 27.5), (144.5, 28.5)]
+                """
+                # TODO: seeing a CC and then an orbital adds two tags at the same location
 
     async def ability_siege_tanks(self):
         # Unsieged range is 7
         # Sieged range is 13
         for tank in self.units(UnitTypeId.SIEGETANK):
             if (
-                len(self.enemy_units.in_attack_range_of(tank, bonus_distance=3)) > 1  # more than 1 hostile unit within 10 range
-                or len(self.enemy_structures.in_attack_range_of(tank, bonus_distance=1)) > 2  # more than 2 hostile buildings within 8 range
+                len(self.enemy_units.in_attack_range_of(tank, bonus_distance=4)) > 1  # more than 1 hostile unit within 11 range
+                or len(self.enemy_structures.in_attack_range_of(tank, bonus_distance=2)) > 2  # more than 2 hostile buildings within 9 range
             ):
                 tank(AbilityId.SIEGEMODE_SIEGEMODE)
         for siegedtank in self.units(UnitTypeId.SIEGETANKSIEGED):
@@ -303,6 +370,43 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 and not marauder.has_buff(BuffId.STIMPACKMARAUDER)
             ):
                 marauder(AbilityId.EFFECT_STIM_MARAUDER)
+
+    async def micro_marines(self):
+        # TODO: if there are no enemy units are around but marine is attacking building, stutter step towards it
+        if self.enemy_units:
+            for u in self.units(UnitTypeId.MARINE):
+                closest_enemy = self.enemy_units.closest_to(u)
+                if closest_enemy.ground_range <= 3:  # facing short range units, kite them back
+                    if u.distance_to(closest_enemy) <= 5 and u.weapon_cooldown > 0:  # enemy in range, weapon ON cooldown
+                        kite_pos = u.position.towards(closest_enemy.position, -u.distance_to_weapon_ready)  # run away
+                        u.move(kite_pos)
+                    elif u.distance_to(closest_enemy) <= 5 and u.weapon_cooldown == 0:  # enemy in range, weapon OFF cooldown
+                        attackable_units = self.enemy_units.in_attack_range_of(u)  # TODO (or not?): filter only to units.is_attacking (if any)
+                        priority_units = attackable_units.sorted(lambda u: u.health_percentage, reverse=True)  # attack weakest unit
+                        target = priority_units.pop()
+                        u.attack(target)
+                    elif u.distance_to(closest_enemy) > 5 and u.weapon_cooldown == 0:  # enemy out of range, weapon OFF cooldown
+                        potential_units = self.enemy_units.closer_than(6, u)  # attack a nearby enemy
+                        if potential_units:
+                            priority_units = potential_units.sorted(lambda u: u.health_percentage, reverse=True)
+                            target = priority_units.pop()
+                            u.attack(target)
+                else:  # facing longer ranged units, run up to them
+                    if u.distance_to(closest_enemy) <= 6 and u.distance_to(closest_enemy) >= 1 and u.weapon_cooldown > 0 and u.health_percentage > .2:  # enemy close, weapon ON cooldown
+                        kite_pos = u.position.towards(closest_enemy.position, u.distance_to_weapon_ready)  # run towards
+                        u.move(kite_pos)
+                    elif u.weapon_cooldown == 0:  # weapon OFF cooldown
+                        potential_units = self.enemy_units.closer_than(8, u)  # TODO (or not?): filter only to units.is_attacking (if any)
+                        if potential_units:
+                            priority_units = potential_units.sorted(lambda u: u.health_percentage, reverse=True)  # attack weakest unit
+                            target = priority_units.pop()
+                            u.attack(target)
+                    else:  # if heavily damaged
+                        pass
+
+    async def micro_reaper(self):
+        for r in self.units(UnitTypeId.REAPER):
+            r.move(self.enemy_start_locations[0])
 
     async def ability_interference_matrix(self):
         for raven in self.units(UnitTypeId.RAVEN):
@@ -348,6 +452,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
     
     async def build_addons(self):
         # Rax: 1 Reactor, 2 Lab, 3 Reactor, 4 Reactor, 5 Lab, 6+ Reactor
+        if not self.built_reaper: return  # won't build add-ons until after reaper is made
         for rax in self.structures(UnitTypeId.BARRACKS).ready.idle:
             if (
                 not rax.has_add_on
@@ -456,8 +561,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                                 
     async def build_refineries(self):
         if (
-            self.structures(UnitTypeId.BARRACKS)
-            and self.already_pending(UnitTypeId.REFINERY) + self.structures(UnitTypeId.REFINERY).ready.amount < self.get_ideal_building_count("REFINERY")
+            self.already_pending(UnitTypeId.REFINERY) + self.structures(UnitTypeId.REFINERY).ready.amount < self.get_ideal_building_count("REFINERY")
             and self.can_afford(UnitTypeId.REFINERY)
         ):
             geysers = self.vespene_geyser.closer_than(10, self.cc)
@@ -522,10 +626,14 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                         await self.build(UnitTypeId.MISSILETURRET, near=cc.position.towards(self.game_info.map_center, -4))
 
     async def upgrade_command_center(self):
+        # returns 
         for cc in self.structures(UnitTypeId.COMMANDCENTER).ready.idle:
             abilities = await self.get_available_abilities(cc)
-            if AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND in abilities and self.can_afford(AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND):
-                cc(AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND)
+            if AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND in abilities:
+                if self.can_afford(AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND):
+                    cc(AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND)
+                else:
+                    return("cant_afford")  # would otherwise do
 
     async def manage_orbital_energy(self):
         for cc in self.structures(UnitTypeId.ORBITALCOMMAND).ready:
@@ -562,7 +670,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 
     async def repair_damaged_buildings(self):
         for building in self.structures.ready:
-            if building.health_percentage < 1:
+            if building.health_percentage < 1 and building.health_percentage > 0.05:
                 repairingworkers = 0
                 for worker in self.workers.closer_than(3, building.position):
                     if worker.is_repairing and worker.order_target == building.tag:
@@ -656,6 +764,10 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             if rax.is_idle:
                 if rax.has_techlab:
                     if self.can_afford(UnitTypeId.MARAUDER): rax.train(UnitTypeId.MARAUDER)
+                elif not self.built_reaper:
+                    if self.can_afford(UnitTypeId.REAPER):
+                        rax.train(UnitTypeId.REAPER)
+                        self.built_reaper = True
                 else:
                     if self.can_afford(UnitTypeId.MARINE): rax.train(UnitTypeId.MARINE)
             if rax.has_reactor and len(rax.orders) < 2:  # not elif
@@ -706,10 +818,10 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             self.value_lost_minerals_base = self.value_lost_minerals
             self.value_lost_vespene_base = self.value_lost_vespene
 
-        total_value_killed = (self.value_killed_minerals - self.value_killed_minerals_base) + (self.mineral_gas_ratio * (self.value_killed_vespene - self.value_killed_vespene_base))
-        total_value_lost = (self.value_lost_minerals - self.value_lost_minerals_base) + (self.mineral_gas_ratio * (self.value_lost_vespene - self.value_lost_vespene_base))
+        self.total_value_killed = (self.value_killed_minerals - self.value_killed_minerals_base) + (self.mineral_gas_ratio * (self.value_killed_vespene - self.value_killed_vespene_base))
+        self.total_value_lost = (self.value_lost_minerals - self.value_lost_minerals_base) + (self.mineral_gas_ratio * (self.value_lost_vespene - self.value_lost_vespene_base))
         
-        return self.attack_length + (total_value_killed - total_value_lost)/80
+        return self.attack_length + (self.total_value_killed - self.total_value_lost)/80
     
     def get_attack_downtime(self, reset=False):
         if reset:
@@ -747,12 +859,13 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 
     def get_ideal_building_count(self, building):
         th = self.townhalls.amount
+        adjusted_time = self.time - self.my_stats['workers_lost'] * 5
         if building == "COMMANDCENTER":
-            if self.time < 105: return 1    # 1:45
-            elif self.time < 330: return 2  # 5:30
-            elif self.time < 560: return 3  # 9:20
-            elif self.time < 690: return 4  # 11:30
-            elif self.time < 840: return 5  # 14:00
+            if adjusted_time < 105: return 1    # 1:45
+            elif adjusted_time < 330: return 2  # 5:30
+            elif adjusted_time < 560: return 3  # 9:20
+            elif adjusted_time < 690: return 4  # 11:30
+            elif adjusted_time < 840: return 5  # 14:00
             else: return 6
         elif building == "BARRACKS":
             if th == 1: return 2
@@ -767,13 +880,14 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             if th < 3: return 1
             else: return 2
         elif building == "REFINERY":
-            if th < 2: return th
-            elif th == 2 and self.townhalls.ready.amount == 2: return 3
+            if not self.structures.of_type({SUPPLYDEPOT, SUPPLYDEPOTLOWERED}): return 0  # until supply depot started
+            elif th < 2: return th
+            elif self.townhalls.ready.amount == 2: return 3
             elif th == 2: return th
             else: return th + 1
         elif building == "ENGINEERINGBAY":
             if th > 2: return 2
-            elif self.time > 200: return 1  # 3:20
+            elif adjusted_time > 200: return 1  # 3:20
             else: return 0
         else: raise(Exception)
 
@@ -819,17 +933,17 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
     def showdebuginfo(self, iteration):
         self._client.debug_text_simple(text="Deckard v0.1")
 
-        debugtext1 = "# Townhalls:        " + str(self.townhalls.amount) + "/" + str(self.get_ideal_building_count("COMMANDCENTER"))
+        debugtext1 = "# Bases:            " + str(self.townhalls.amount) + "/" + str(self.get_ideal_building_count("COMMANDCENTER"))
         self._client.debug_text_screen(text=debugtext1, pos=Point2((0, 0.05)), color=None, size=8)
 
-        #debugtext2 = "Ideal CC Count:     " + str(self.get_ideal_building_count("COMMANDCENTER"))
-        #self._client.debug_text_screen(text=debugtext2, pos=Point2((0, 0.06)), color=None, size=8)
+        debugtext2 = "Opponent # Bases:   " + str(len(self.opponent_info['expansions']))
+        self._client.debug_text_screen(text=debugtext2, pos=Point2((0, 0.06)), color=None, size=8)
 
         debugtext3 = "Worker Supply:      " + str(self.supply_workers) + "/" + str(self.get_ideal_worker_count())
         self._client.debug_text_screen(text=debugtext3, pos=Point2((0, 0.07)), color=None, size=8)
 
-        #debugtext4 = "Ideal Worker Count: " + str(self.get_ideal_worker_count())
-        #self._client.debug_text_screen(text=debugtext4, pos=Point2((0, 0.08)), color=None, size=8)
+        debugtext4 = "Workers Lost:       " + str(self.my_stats['workers_lost'])
+        self._client.debug_text_screen(text=debugtext4, pos=Point2((0, 0.08)), color=None, size=8)
 
         debugtext5 = "# Barracks:         " + str(self.structures.of_type({UnitTypeId.BARRACKS, UnitTypeId.BARRACKSFLYING}).amount) + "/" + str(self.get_ideal_building_count("BARRACKS"))
         self._client.debug_text_screen(text=debugtext5, pos=Point2((0, 0.09)), color=None, size=8)
@@ -864,6 +978,11 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         if dwntimer <= 0: dwntimer = "-"
         debugtext14 = "Time Until Attack:  " + str(dwntimer)
         self._client.debug_text_screen(text=debugtext14, pos=Point2((0, 0.18)), color=None, size=8)
+
+        rk_timer = "Recently Killed:    " + str(self.total_value_killed)
+        self._client.debug_text_screen(text=rk_timer, pos=Point2((0, 0.19)), color=None, size=8)
+        rl_timer = "Recently Lost:      " + str(self.total_value_lost)
+        self._client.debug_text_screen(text=rl_timer, pos=Point2((0, 0.20)), color=None, size=8)
 
         
         self._client.debug_text_world("RALLY", Point3((self.get_rally_point().x, self.get_rally_point().y, self.get_terrain_z_height(self.get_rally_point()))), size=12)
@@ -925,12 +1044,11 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         flipped = cv2.flip(game_data, 0)
         resized = cv2.resize(flipped, dsize=None, fx=2, fy=2)
 
-        cv2.imshow('Intel', resized)
+        cv2.imshow('DeckardIntel', resized)
         cv2.waitKey(1)
 
     def on_end(self, result):  # Do things here after the game ends
         print("Game ended.")
-        print("'surrendernow' was " + str(self.surrendernow))
 
 
 

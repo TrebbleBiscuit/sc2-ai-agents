@@ -70,7 +70,7 @@ class Model2E(sc2.BotAI):
                 if self.placement_position:
                     if this_worker.build(UnitTypeId.SUPPLYDEPOT, self.placement_position): self.opening_step += 1
         elif self.opening_step == 3:  # send out 3nd SCV
-            if self.time > 18:
+            if self.time > 22:
                 self.worker3 = self.workers.gathering.closest_to(self.enemy_start_locations[0].position)
                 self.worker3.move(self.enemy_start_locations[0].position)
                 self.opening_step += 1
@@ -167,8 +167,20 @@ class Model2E(sc2.BotAI):
         for u in self.units(UnitTypeId.MARINE):
             if self.enemy_units:
                 closest_enemy = self.enemy_units.closest_to(u)
-                if u.distance_to(closest_enemy) < 6 and u.weapon_cooldown > 0:
-                    u.move(u.position.towards(closest_enemy.position, -u.distance_to_weapon_ready))
+                if u.distance_to(closest_enemy) < 5 and u.weapon_cooldown > 0 and u.health_percentage < 80:
+                    kite_pos = u.position.towards(closest_enemy.position, -u.distance_to_weapon_ready)
+                    u.move(kite_pos)
+                elif u.distance_to(closest_enemy) <= 5 and u.weapon_cooldown == 0:
+                    attackable_units = self.enemy_units.in_attack_range_of(u)  # TODO: filter only to units.is_attacking (if any)
+                    priority_units = attackable_units.sorted(lambda u: u.health_percentage, reverse=True)
+                    target = priority_units.pop()
+                    u.attack(target)
+                elif u.distance_to(closest_enemy) > 5 and u.weapon_cooldown == 0:
+                    potential_units = self.enemy_units.closer_than(6, u)
+                    if potential_units:
+                        priority_units = potential_units.sorted(lambda u: u.health_percentage, reverse=True)
+                        target = priority_units.pop()
+                        u.attack(target)
         # away from ATTACKING units with less range (zealots, lings, workers)
         # towards units with more range (stalkers)
         # 
@@ -257,7 +269,7 @@ class Model2E(sc2.BotAI):
 def main():
     sc2.run_game(
         sc2.maps.get("CatalystLE"),
-        [Bot(Race.Terran, Model2E()), Computer(Race.Protoss, Difficulty.VeryHard)],
+        [Bot(Race.Terran, Model2E()), Computer(Race.Zerg, Difficulty.VeryHard)],
         realtime=False,
     )
 

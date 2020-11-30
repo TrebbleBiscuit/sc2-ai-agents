@@ -11,10 +11,11 @@ from androidHunter import androidHunter
 def main():
     sc2.run_game(
         sc2.maps.get("CatalystLE"),
-        #[Bot(Race.Terran, DeckardBot()), Bot(Race.Protoss, Nexus7())],
+        [Bot(Race.Terran, DeckardBot()), Bot(Race.Protoss, Nexus7())],
         #[Bot(Race.Terran, DeckardBot()), Bot(Race.Zerg, androidHunter())],
-        [Bot(Race.Terran, Model2E()), Bot(Race.Zerg, androidHunter())],
         #[Bot(Race.Terran, DeckardBot()), Bot(Race.Zerg, ZergRushBot())],
+        #[Bot(Race.Terran, DeckardBot()), Bot(Race.Terran, Model2E())],
+        #[Bot(Race.Terran, Model2E()), Bot(Race.Zerg, androidHunter())],
         #[Bot(Race.Terran, Model2E()), Bot(Race.Protoss, Nexus7())],
         realtime=True,
         #save_replay_as="DeckardvsandroidHunter.SC2Replay",

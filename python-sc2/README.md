@@ -2,6 +2,13 @@
 These bots make use of https://github.com/BurnySc2/python-sc2/
 
 
+### Run python-sc2 bots
+
+For installation instructions, read the [python-sc2 API documentation.](https://github.com/BurnySc2/python-sc2)
+
+After you install python-sc2, Starcraft II, and maps, run a relevant .py file
+
+
 ### Deckard
 
 Race: Terran    
@@ -24,3 +31,10 @@ Race: Zerg
 Unit Composition: Zergling    
 Strategy: Basic timing attack    
 Micro: Basic attack move, inject function (quite buggy)
+
+### Model2E
+
+Race: Terran
+Unit Composition: Marines
+Strategy: Proxy 4rax
+Micro: Stutter step
