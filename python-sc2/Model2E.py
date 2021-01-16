@@ -25,6 +25,10 @@ class Model2E(sc2.BotAI):
         self.opening_step = 0
         self.allin = False
         self.killed_main = False
+        self.value_killed_minerals = 0
+        self.value_killed_vespene = 0
+        self.value_lost_minerals = 0
+        self.value_lost_vespene = 0
 
     async def on_step(self, iteration):
         if iteration == 0:
@@ -47,6 +51,30 @@ class Model2E(sc2.BotAI):
         await self.train_marines()  # do even during opening
         await self.lower_depots()
         await self.intel()
+    
+    async def on_unit_created(self, unit):
+        if unit.type_id == "UnitTypeId.QUEEN":
+            print("Queen Created!")
+
+    async def on_unit_destroyed(self, tag):
+        lost = self._units_previous_map.get(tag) or self._structures_previous_map.get(tag)
+        enemylost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)
+
+        if lost:
+            self.value_lost_minerals += self.calculate_unit_value(lost.type_id).minerals
+            self.value_lost_vespene += self.calculate_unit_value(lost.type_id).vespene
+            if str(lost.type_id) == "UnitTypeId.DRONE":
+                pass  # TODO: keep track of number of workers lost
+
+        if enemylost and str(enemylost.type_id) != "UnitTypeId.MULE":
+            self.value_killed_minerals += self.calculate_unit_value(enemylost.type_id).minerals
+            self.value_killed_vespene += self.calculate_unit_value(enemylost.type_id).vespene
+            # UNDER CONSTRUCTION
+            if enemylost.type_id in [HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS]:
+                if enemylost in self.opponent_info["expansions"]: 
+                    self.opponent_info["expansions"].remove(enemylost)
+                else: print("WARNING: Enemy lost expo wasn't in expansions list!")
+
     
 
     async def opening_build(self):
@@ -148,7 +176,7 @@ class Model2E(sc2.BotAI):
             await self.stutter_step()
     
     async def build_depots(self):
-        if not self.already_pending(UnitTypeId.SUPPLYDEPOT) and self.supply_left < 7 and self.supply_cap < 200:
+        if not self.already_pending(UnitTypeId.SUPPLYDEPOT) and self.supply_left < 7 and self.supply_cap < 200 and self.workers and self.townhalls:
             await self.build(UnitTypeId.SUPPLYDEPOT, near=self.townhalls.first.position.towards(self.game_info.map_center, 6))
     
     async def make_barracks(self):
@@ -270,7 +298,7 @@ def main():
     sc2.run_game(
         sc2.maps.get("CatalystLE"),
         [Bot(Race.Terran, Model2E()), Computer(Race.Zerg, Difficulty.VeryHard)],
-        realtime=False,
+        realtime=True,
     )
 
 

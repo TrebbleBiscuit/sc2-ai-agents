@@ -13,12 +13,17 @@ from sc2.position import Point2, Point3
 ###    A Starcraft II AI    ###
 ###############################
 
-class SN_10L(sc2.BotAI):  # give it a cool name tho
+class SN_10L(sc2.BotAI):
     async def on_start(self):
         print("SN_10-L Initialized")
         
         self.game_stage = "Opening"
         self.opening_step = 0
+        self.queen_assignments = {}  # {queen tag: hatch tag}
+        self.value_killed_minerals = 0
+        self.value_killed_vespene = 0
+        self.value_lost_minerals = 0
+        self.value_lost_vespene = 0
 
     async def on_step(self, iteration):
         if iteration == 0:
@@ -33,6 +38,7 @@ class SN_10L(sc2.BotAI):  # give it a cool name tho
         await self.distribute_workers()
         await self.ability_inject()
         await self.army_movement(iteration)
+        await self.pair_queens_to_hatches()
         
         if self.game_stage == "Opening":
             await self.opening_build()
@@ -45,7 +51,49 @@ class SN_10L(sc2.BotAI):  # give it a cool name tho
             await self.spawn_overlords()
         else:
             print("undefined game stage, oof")
-    
+
+    async def on_unit_created(self, unit):
+        pass
+
+    async def on_unit_destroyed(self, tag):
+        lost = self._units_previous_map.get(tag) or self._structures_previous_map.get(tag)
+        if lost:
+            self.value_lost_minerals += self.calculate_unit_value(lost.type_id).minerals
+            self.value_lost_vespene += self.calculate_unit_value(lost.type_id).vespene
+            if str(lost.type_id) == "UnitTypeId.DRONE":
+                pass  # TODO: keep track of number of workers lost
+            if lost.tag in self.queen_assignments:  # this could be one line, self.queen_assignments.pop(lost.tag, None)
+                self.queen_assignments.pop(lost.tag)
+                # TODO: if lost hatch, remove 
+
+        enemylost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)
+        if enemylost and str(enemylost.type_id) != "UnitTypeId.MULE":
+            self.value_killed_minerals += self.calculate_unit_value(enemylost.type_id).minerals
+            self.value_killed_vespene += self.calculate_unit_value(enemylost.type_id).vespene
+            # UNDER CONSTRUCTION
+            if enemylost.type_id in [HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS]:
+                print("Enemy lost townhall!")
+
+
+    async def pair_queens_to_hatches(self):
+        if len(self.queen_assignments) < self.townhalls.ready.amount:  # at least 1 hatch without a paired queen
+            for q in [x for x in self.units(QUEEN) if x.tag not in self.queen_assignments]:  # unassigned queens
+                for h in self.townhalls.sorted_by_distance_to(q.position):  # closest townhalls first
+                    if h.tag not in list(self.queen_assignments.values()):  # if hatch doesn't have paired queen
+                        self.queen_assignments[q.tag] = h.tag  # pair this queen with it
+                        print("New queen paired!")
+                        print(f"Queen assignments is: {self.queen_assignments}")
+                        return
+        """
+        if len(self.queen_assignments) < self.townhalls.ready.amount:  # at least 1 hatch without a paired queen
+            for h in self.townhalls.sorted_by_distance_to(unit.position, reverse=True):  # closest townhalls first
+                if h.tag not in list(self.queen_assignments.values()):  # if hatch doesn't have paired queen
+                    self.queen_assignments[unit.tag] = h.tag  # pair this queen with it
+                    print("New queen paired!")
+                    print(f"Queen assignments is: {self.queen_assignments}")
+                    break  # break out of for loop
+        """
+
 
     async def opening_build(self):
         # 17 hatch 18 gas 17 pool
@@ -117,6 +165,10 @@ class SN_10L(sc2.BotAI):  # give it a cool name tho
             print("opening step exceeds expected limits")
             
     async def army_movement(self, iteration):
+        queens: Units = [q for q in self.units(UnitTypeId.QUEEN) if q.tag not in self.queen_assignments]  # non-paired queens
+        if iteration % 4 == 0:
+            for queen in queens: queen.attack(self.get_rally_point())
+        
         forces: Units = self.units(UnitTypeId.ZERGLING)
         if self.time > 360:  # 360 sec = 6:00
             for unit in forces.idle: unit.attack(self.enemy_start_locations[0].position)
@@ -187,12 +239,23 @@ class SN_10L(sc2.BotAI):  # give it a cool name tho
                 break  # so that it doesn't queue two refineries at once
     
     async def ability_inject(self):    # TODO: rn all the queens get told to inject the same hatch 
+        for q, h in self.queen_assignments.items():  # this syntax is nice
+            queen = self.units(QUEEN).find_by_tag(q)
+            hatch = self.townhalls.find_by_tag(h)
+            if queen.energy >= 25 and hatch.is_ready and not hatch.has_buff(QUEENSPAWNLARVATIMER):
+                queen(AbilityId.EFFECT_INJECTLARVA, hatch)
+            elif queen.is_idle and queen.position.distance_to(hatch.position) > 10:
+                queen.move(hatch.position)
+
+
+        """
         inject_queens = self.units.filter(lambda unit: unit.type_id == UnitTypeId.QUEEN and unit.energy >= 25).idle
         if self.townhalls and inject_queens:
             for hatch in self.townhalls:
                 queen = inject_queens.closest_to(hatch)
                 if queen and queen.energy >= 25 and not hatch.has_buff(BuffId.QUEENSPAWNLARVATIMER):
                     queen(AbilityId.EFFECT_INJECTLARVA, hatch)
+        """
 
     async def expand(self):
         if (
