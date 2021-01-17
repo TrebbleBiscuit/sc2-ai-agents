@@ -61,6 +61,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         self.willsurrender = True           # bot will set this to false if it thinks it's a base trade
         self.surrendernow = False
         self.basetrade = False
+        self.beingcheesed = False  # TODO
         self.army_destroyed_enemy_main = False
         self.army_need_vikings = False
         self.army_need_thors = False
@@ -79,15 +80,35 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         self.value_lost_vespene_base = self.value_lost_vespene
         self.built_reaper = False
         self.scv_scouted = False
+        self.scouted_pool = False  # TvZ
         self.my_stats = {
             "workers_lost": 0,
         }
         self.opponent_info = {
             "expansions": set(), # stores a set of unit objects
-            "army_tags_scouted": [], # list of dicts with entries: {"tag": 123, "scoutTime": 15.6, "supply": 2}
+            "army_units_scouted": {}, # dict of dicts; see template below
             "army_supply_scouted": 0,
             "army_supply_visible": 0,
         }
+        """
+            'army_units_scouted': {
+                <tag>: {
+                   'type_id': UnitTypeId.ROACH,
+                   'value_minerals': 75,
+                   'value_gas': 25,
+                   'supply': 2,
+                   'first_seen': 273.55819722
+                },
+            }
+            """
+        """
+        idea: opponent_info['expansions'] is a dict
+        <unit object> : {
+            'finished_at': <game time float>,
+        }
+
+        
+        """
         if self.make_log:
             self.logfile = open("deckard.log", "a")  # append mode
             self.logfile.write("\nDeckard Initialized. \n")
@@ -154,12 +175,12 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             # self.townhalls:
             ## [Unit(name='CommandCenter', tag=4377018369), Unit(name='CommandCenter', tag=4342153217), Unit(name='CommandCenter', tag=4357357569)]
 
-
-        self.showdebuginfo(iteration)               # show debug information in-game
-        # await self.flavor_chat(iteration)         # some kind of annoying flavor
+        # Macro
         await self.manage_spending()                # spend money
         await self.manage_orbital_energy()          # manage orbital energy
         await self.army_movement(iteration)         # manage non-worker units
+
+        # Micro
         await self.ability_siege_tanks()            # use siege/unsiege ability
         await self.ability_stim()                   # use stim ability
         await self.ability_interference_matrix()    # use interference matrix ability
@@ -168,6 +189,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         await self.micro_reaper()                   # control reaper and scout
         await self.scv_scout()                      # 17 scout with SCV
         # await self.react_to_scouting()              # TODO: store and utilize scouting information
+
+        self.showdebuginfo(iteration)               # show debug information in-game
+        # await self.flavor_chat(iteration)         # some kind of annoying flavor
         await self.intel()                          # display intel visualization
         if self.make_log:
             await self.telemetry()
@@ -175,7 +199,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
     async def on_enemy_unit_entered_vision(self, enemyunit):
         """
         UNDER CONSTRUCTION
-        if enemyunit.tag not in self.opponent_info["army_tags_scouted"]:
+        if enemyunit.tag not in self.opponent_info["army_units_scouted"]:
             self.opponent_info.append{}
         """
         if not self.army_need_vikings:
@@ -186,7 +210,28 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             need_thors_list = ["Mutalisk"] # Baneling? Want to eventually add capital ships and have thors toggle high impact payload
             if enemyunit.name in need_thors_list:
                 self.army_need_thors = True
+        
+        if self.time < 120 and not self.beingcheesed:  # under 2:00
+            for u in self.enemy_units.of_type(ZERGLING):  # if we scout lings
+                self.beingcheesed = True
+                print("I think we're being cheesed...")
+                break
+        
+        if enemyunit.type_id not in {DRONE, PROBE, SCV, OVERLORD, LARVA, EGG, BROODLING, QUEEN, CHANGELING, CHANGELINGMARINESHIELD, BANELINGCOCOON} and not enemyunit.is_structure:
+            if enemyunit.tag not in self.opponent_info['army_units_scouted']:
+                self.opponent_info['army_units_scouted'][enemyunit.tag] = {
+                    'type_id': enemyunit.type_id,
+                    'value_minerals': self.calculate_unit_value(enemyunit.type_id).minerals,
+                    'value_gas': self.calculate_unit_value(enemyunit.type_id).vespene,
+                    'supply': self.calculate_supply_cost(enemyunit.type_id),  # TODO: calculate_supply_cost doesn't behave as expected, see documentation and fix
+                    'first_seen': self.time
+                }
+                print(f"just added scouted enemy {enemyunit.type_id} {enemyunit.tag} to army_units_scouted")
+                print(f"total scouted enemy army value is now: {self.get_enemy_army_value()}")
+            
+
         """
+        
         if (
             enemyunit.is_flying
             and enemyunit.name not in ["Observer", "WarpPrism", "Overlord"]
@@ -197,6 +242,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         """
 
     async def on_unit_destroyed(self, tag):
+        if tag in self.opponent_info['army_units_scouted']:
+            self.opponent_info['army_units_scouted'].pop(tag)
+
         lost = self._units_previous_map.get(tag) or self._structures_previous_map.get(tag)
         enemylost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)
 
@@ -359,12 +407,19 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             if th in self.opponent_info['expansions']:  # this th already in set
                 continue
             if len(self.opponent_info["expansions"]) > 0 and th.position.closest(self.opponent_info["expansions"]).distance_to(th.position) < 2:  # the townhall in question very close to one already in the list
+                # this is here b/c a command center and an orbital would otherwise show up as different expansions
                 self.opponent_info['expansions'].remove(th.position.closest(self.opponent_info["expansions"]))  # remove old expansion from set
                 self.opponent_info['expansions'].add(th)  # add new expansion
             else:  # new expansion!
                 self.opponent_info["expansions"].add(th)
                 print("found a new enemy base!")
-                print(f"its build progress is {th.build_progress}")
+                if th.build_progress < 1:
+                    print(f"its build progress is {th.build_progress}")
+                    started_at = self.time - (th.build_progress * 71)
+                    finish_at = self.time + ((1 - th.build_progress) * 71)
+                    print(f"current game time is {self.time}")
+                    print(f"scouted townhall was started at time {started_at}")
+                    print(f"scouted townhall will finish at time {finish_at}")
                 if th.position in self.expansion_locations_list:
                     print("expansion is at an expected location")
                 else:
@@ -379,6 +434,18 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 [(39.5, 139.5), (68.5, 140.5), (48.5, 106.5), (100.5, 139.5), (98.5, 113.5), (53.5, 66.5), (85.5, 54.5), (130.5, 101.5), (140.5, 143.5), (43.5, 24.5), (83.5, 28.5), (135.5, 61.5), (115.5, 27.5), (144.5, 28.5)]
                 """
                 # TODO: seeing a CC and then an orbital adds two tags at the same location?
+        # now for non-townhall buildings
+        if not self.scouted_pool:
+            for pool in self.enemy_structures.of_type(SPAWNINGPOOL):
+                print("found an enemy spawning pool!")
+                print(f"its build progress is {pool.build_progress}")
+                started_at = self.time - (pool.build_progress * 71)
+                finish_at = self.time + ((1 - pool.build_progress) * 71)
+                print(f"current game time is {self.time}")
+                print(f"scouted pool was started at time {started_at}")
+                print(f"scouted pool will finish at time {finish_at}")
+                self.scouted_pool = True
+
 
     async def ability_siege_tanks(self):
         # Unsieged range is 7
@@ -386,7 +453,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         for tank in self.units(UnitTypeId.SIEGETANK):
             if (
                 len(self.enemy_units.in_attack_range_of(tank, bonus_distance=4)) > 1  # more than 1 hostile unit within 11 range
-                or len(self.enemy_structures.in_attack_range_of(tank, bonus_distance=2)) > 2  # more than 2 hostile buildings within 9 range
+                or len(self.enemy_structures.in_attack_range_of(tank, bonus_distance=2)) > 1  # more than 1 hostile building within 9 range
             ):
                 tank(AbilityId.SIEGEMODE_SIEGEMODE)
         for siegedtank in self.units(UnitTypeId.SIEGETANKSIEGED):
@@ -418,7 +485,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         # TODO: if there are no enemy units are around but marine is attacking building, stutter step towards it
         if self.enemy_units:  # TODO stutter step towards buildings even if there are no enemy units
             for u in self.units(UnitTypeId.MARINE):
-                closest_enemy = self.enemy_units.closest_to(u)
+                closest_enemy = self.enemy_units.closest_to(u)  # TODO: filter out overlords, observers, etc
                 if (
                     self.enemy_structures
                     and u.weapon_cooldown > 0  # weapon off cooldown
@@ -933,6 +1000,16 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             if not self.enemy_units.closer_than(40, self.start_location) or self.townhalls.amount > 1:
                 await self.expand_now()
 
+    def get_enemy_army_value(self):
+        value_minerals = 0
+        value_gas = 0
+        for tag, udict in self.opponent_info['army_units_scouted'].items():
+            # value_minerals += self.calculate_unit_value(this_unit.type_id).minerals
+            # value_gas += self.calculate_unit_value(this_unit.type_id).vespene
+            value_minerals += udict['value_minerals']
+            value_gas += udict['value_gas']
+        return (value_minerals, value_gas)
+
     def get_attack_length(self, reset=False):
         if reset:
             self.value_killed_minerals_base = self.value_killed_minerals
@@ -975,6 +1052,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             return total_value_killed - total_value_lost
         else: raise Exception  # invalid typ
 
+
     def get_mule_target(self):
         for cc in self.townhalls.ready:
             if cc.tag == max(self.townhalls.tags):
@@ -989,7 +1067,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             if loc not in enemy_expo_pos_list and loc not in [p.position for p in self.townhalls]:  # no friendly or hostile base at this location
                 to_scout[loc] = 140 - loc.distance_to(self.enemy_start_locations[0])  # {(115.5, 27.5): -5.3, (135.5, 61.5): 6.3, (83.5, 28.5): 10.6, ...}  position keyed to weight
         cho = random.choices(list(to_scout.keys()), [x**3 for x in to_scout.values()])[0]  # weighted choice of cubed adjusted distance values - there has to be a better way to do this
-        print(f"to_scout is {to_scout}")
+        #print(f"to_scout is {to_scout}")
         #print(f"cho is {cho}")
         return cho
         #return random.choice(to_scout)
@@ -1012,7 +1090,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         th = self.townhalls.amount
         adjusted_time = self.time - (self.my_stats['workers_lost'] * 5) - (self.get_resources_lost('diff') / 200)
         if building == "COMMANDCENTER":
-            if self.be_aggressive and th >= 2: adjusted_time -= 60  # take 3rd 60 seconds later
+            if self.beingcheesed: adjusted_time -= 60  # take natural 60 seconds later 
+            elif self.be_aggressive and th >= 2: adjusted_time -= 60  # take 3rd 60 seconds later
+
             if adjusted_time < 100: return 1    # 1:40
             elif adjusted_time < 330: return 2  # 5:30
             elif adjusted_time < 560: return 3  # 9:20
@@ -1027,14 +1107,15 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             elif th == 4: ib = 7
             elif th == 5: ib = 10
             else: ib = 15
+            if self.beingcheesed and th == 1: ib += 1
             if self.townhalls.ready.amount >= 2 and self.be_aggressive: ib += 2  # 2 more rax on 2+ bases
             return ib
         elif building == "FACTORY":
             if th < 5 and self.structures.of_type(UnitTypeId.BARRACKS).amount >= 1: return 1  # rax finished
             else: return 2
         elif building == "STARPORT":
-            if th < 3 and self.structures.of_type(UnitTypeId.FACTORY).amount == 1: return 1  # factory finished
-            elif th < 5: return 2
+            if self.townhalls.ready.amount < 3 and self.structures.of_type(UnitTypeId.FACTORY).amount == 1: return 1  # factory finished
+            elif self.townhalls.ready.amount < 4: return 2
             else: return 3
         elif building == "REFINERY":
             if not self.structures.of_type({SUPPLYDEPOT, SUPPLYDEPOTLOWERED}): return 0  # until supply depot started
@@ -1145,6 +1226,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         self._client.debug_text_screen(text=rk_timer, pos=Point2((0, 0.19)), color=None, size=8)
         rl_timer = "Recently Lost:      " + str(self.total_value_lost)
         self._client.debug_text_screen(text=rl_timer, pos=Point2((0, 0.20)), color=None, size=8)
+
+        cheesecheck = "Being Cheesed?      " + str(self.beingcheesed)
+        self._client.debug_text_screen(text=cheesecheck, pos=Point2((0, 0.21)), color=None, size=8)
 
         
         self._client.debug_text_world("RALLY", Point3((self.get_rally_point().x, self.get_rally_point().y, self.get_terrain_z_height(self.get_rally_point()))), size=12)
