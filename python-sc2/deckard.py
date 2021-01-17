@@ -2,6 +2,7 @@ from asyncio import sleep
 import random
 import sc2
 from sc2 import Race, Difficulty
+from sc2.data import AIBuild
 from sc2.constants import *
 from sc2.ids.unit_typeid import *
 from sc2.ids.ability_id import *
@@ -9,13 +10,14 @@ from sc2.player import Bot, Computer
 from sc2.unit import Unit
 from sc2.units import Units
 from sc2.position import Point2, Point3
+import utils
 import cv2
 import numpy as np
 
 def main():
     sc2.run_game(
         sc2.maps.get("CatalystLE"),  # select map
-        [Bot(Race.Terran, DeckardBot()), Computer(Race.Zerg, Difficulty.CheatMoney)],  # select opponent race and difficulty
+        [Bot(Race.Terran, DeckardBot()), Computer(Race.Zerg, Difficulty.CheatMoney, AIBuild.Rush)],  # select opponent race and difficulty
         realtime=False,  # if False, render as fast as possible
     )
 
@@ -58,6 +60,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         self.announced_search = False
         self.announced_efficiency = False
 
+        self.army_group = utils.ArmyGroup(self)
         self.willsurrender = True           # bot will set this to false if it thinks it's a base trade
         self.surrendernow = False
         self.basetrade = False
@@ -120,6 +123,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 
         if iteration == 0:  # All the stuff to do exactly once when the game starts
             self.depot_placement_positions: Set[Point2] = self.main_base_ramp.corner_depots
+            assert len(self.depot_placement_positions) == 2
             # Uncomment the following if you want to build 3 supply depots in the wall instead of a barracks in the middle + 2 depots in the corner
             # self.depot_placement_positions = self.main_base_ramp.corner_depots | {self.main_base_ramp.depot_in_middle}
             self.barracks_placement_position: Point2 = self.main_base_ramp.barracks_correct_placement
@@ -140,6 +144,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                     self.basetrade = True
             else:
                 self.surrendernow = True
+                self.chatty = False  # i don't really like this at the end
                 if self.chatty:
                     await self.chat_send("I've seen things you people wouldn't believe.")
                     await sleep(1)
@@ -214,10 +219,11 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         if self.time < 120 and not self.beingcheesed:  # under 2:00
             for u in self.enemy_units.of_type(ZERGLING):  # if we scout lings
                 self.beingcheesed = True
-                print("I think we're being cheesed...")
+                await self.chat_send("Not very sporting to fire on an unarmed opponent.")
+                print("OH NO WE'RE BEING CHEESED AAAAAAA")
                 break
         
-        if enemyunit.type_id not in {DRONE, PROBE, SCV, OVERLORD, LARVA, EGG, BROODLING, QUEEN, CHANGELING, CHANGELINGMARINESHIELD, BANELINGCOCOON} and not enemyunit.is_structure:
+        if enemyunit.type_id not in {DRONE, PROBE, SCV, OVERLORD, LARVA, EGG, BROODLING, QUEEN, CHANGELING, CHANGELINGMARINE, CHANGELINGMARINESHIELD, BANELINGCOCOON} and not enemyunit.is_structure:
             if enemyunit.tag not in self.opponent_info['army_units_scouted']:
                 self.opponent_info['army_units_scouted'][enemyunit.tag] = {
                     'type_id': enemyunit.type_id,
@@ -226,8 +232,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                     'supply': self.calculate_supply_cost(enemyunit.type_id),  # TODO: calculate_supply_cost doesn't behave as expected, see documentation and fix
                     'first_seen': self.time
                 }
-                print(f"just added scouted enemy {enemyunit.type_id} {enemyunit.tag} to army_units_scouted")
-                print(f"total scouted enemy army value is now: {self.get_enemy_army_value()}")
+                #print(f"just added scouted enemy {enemyunit.type_id} {enemyunit.tag} to army_units_scouted")
+                #print(f"total scouted enemy army value is now: {self.get_enemy_army_value()}")
             
 
         """
@@ -259,14 +265,15 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             self.value_killed_vespene += self.calculate_unit_value(enemylost.type_id).vespene
             # UNDER CONSTRUCTION
             if enemylost.type_id in [HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS]:
-                print("ENEMY LOST TOWNHALL!")
-                print(enemylost)
-                print(f"It was at position: {enemylost.position}")
-                print("was it in the expansions list?")
+                #print("ENEMY LOST TOWNHALL!")
+                #print(enemylost)
+                #print(f"It was at position: {enemylost.position}")
+                #print("was it in the expansions list?")
                 if enemylost in self.opponent_info["expansions"]: 
-                    print("yes")
+                    #print("yes")
                     self.opponent_info["expansions"].remove(enemylost)
-                else: print("no (that's weird) - probably a thing with a terran floating or morphed building?")
+                else: 
+                    print("enemy lost expansion not in expansion list - probably a thing with a floating or morphed building?")
 
         
 
@@ -277,6 +284,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         self.flier: Units = self.units(UnitTypeId.VIKINGFIGHTER)
         medivacs: Units = self.units(UnitTypeId.MEDIVAC)  # TODO: if medivac movement target is far away, boost
         ravens: Units = self.units(UnitTypeId.RAVEN)
+
+        self.army_group.add_to(self.forces)
+        army_group_units = self.army_group.get_units()
         
         if (
             self.units
@@ -391,6 +401,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             self.townhalls.amount >= self.get_ideal_building_count("COMMANDCENTER")
             or self.already_pending(UnitTypeId.COMMANDCENTER)
             or self.enemy_units and self.townhalls.amount == 1
+            # TODO: or enemy army value is bigger than ours?
         ):
             await self.train_from_factory()
             await self.train_from_starport()
@@ -424,9 +435,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                     print("expansion is at an expected location")
                 else:
                     print("expansion is at an UNEXPECTED LOCATION")
-                print(self.opponent_info["expansions"])
+                #print(self.opponent_info["expansions"])
                 #print(self.enemy_start_locations)
-                print(f"sorted_expo_locations is {self.sorted_expo_locations}")
+                #print(f"sorted_expo_locations is {self.sorted_expo_locations}")
                 """
                 found a new enemy base!
                 {Unit(name='Lair', tag=4345561089), Unit(name='Hatchery', tag=4380950529)}
@@ -541,12 +552,14 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 
     async def micro_reaper(self):
         for r in self.units(UnitTypeId.REAPER):
-            if self.enemy_units: closest_enemy = self.enemy_units.closest_to(r)  # need to define this here so we can check it on the next if and then use it more later
-            if self.enemy_units and r.distance_to(closest_enemy) < 8:  # (not elif) enemy nearby
-                dist_to_run = random.uniform(3.5, 5.5)  # randomize a bit so the reaper gets stuck less often
-                r.move(r.position.towards(closest_enemy, -dist_to_run))  # run away from enemy
-                dist_to_run = random.uniform(10, 15)
-                r.move(r.position.towards(self.sorted_expo_locations[0], dist_to_run), queue=True)  # run towards home TODO: run towards random owned expo
+            threatening_units = self.enemy_units.exclude_type({LARVA, OVERLORD, OBSERVER, OVERSEER, CHANGELING, CHANGELINGMARINE, CHANGELINGMARINESHIELD})  # units we're not scared of
+            if threatening_units:
+                closest_enemy = threatening_units.closest_to(r)  # need to define this here so we can check it on the next if and then use it more later
+                if r.distance_to(closest_enemy) < 8:  # (not elif) enemy nearby
+                    dist_to_run = random.uniform(3.5, 5.5)  # randomize a bit so the reaper gets stuck less often
+                    r.move(r.position.towards(closest_enemy, -dist_to_run))  # run away from enemy
+                    dist_to_run = random.uniform(10, 15)
+                    r.move(r.position.towards(self.sorted_expo_locations[0], dist_to_run), queue=True)  # run towards home TODO: run towards random owned expo
             elif r.is_idle or r.is_attacking:  # not doing something already (or likely autoattacking something)
                 r.move(self.get_pos_to_scout())
 
@@ -567,30 +580,46 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                     raven(AbilityId.EFFECT_INTERFERENCEMATRIX, target)
 
     async def build_production(self):
-        if self.workers.gathering:
+        """
+        if self.workers.gathering:  # workers on their way to get resources
             buildingscv = self.workers.gathering.random
+        elif self.workers.collecting:  # workers actively collecting OR on their way to get resources
+            buildingscv = self.workers.collecting.random
         else:
             return
+        """
+        # TODO: avoid using self.build, replace with the kind of structure we use for the non-first barracks
         # First Barracks
-        if (
-            self.tech_requirement_progress(UnitTypeId.BARRACKS) == 1
+        if (  # 1st rax goes in the wall
+            self.can_afford(UnitTypeId.BARRACKS)
+            and self.tech_requirement_progress(UnitTypeId.BARRACKS) == 1
             and self.already_pending(UnitTypeId.BARRACKS) + self.structures.of_type({UnitTypeId.BARRACKS, UnitTypeId.BARRACKSFLYING}).ready.amount == 0
         ):
-            if self.can_afford(UnitTypeId.BARRACKS): buildingscv.build(UnitTypeId.BARRACKS, self.barracks_placement_position)
-        elif (
-            self.tech_requirement_progress(UnitTypeId.BARRACKS) == 1
-            and self.already_pending(UnitTypeId.BARRACKS) + self.structures.of_type({UnitTypeId.BARRACKS, UnitTypeId.BARRACKSFLYING}).ready.amount == 1
-            and self.townhalls.amount > 1  # 2nd rax after expo
+            self.workers.gathering.closest_to(self.barracks_placement_position).build(UnitTypeId.BARRACKS, self.barracks_placement_position)
+            # await self.build(UnitTypeId.BARRACKS, self.barracks_placement_position)
+        elif (  # other raxes go wherever
+            self.can_afford(UnitTypeId.BARRACKS)
+            and self.tech_requirement_progress(UnitTypeId.BARRACKS) == 1
+            and self.already_pending(UnitTypeId.BARRACKS) + self.structures.of_type({UnitTypeId.BARRACKS, UnitTypeId.BARRACKSFLYING}).ready.amount < self.get_ideal_building_count("BARRACKS")
+            #and self.townhalls.amount > 1  # 2nd rax after expo - should be done in get_ideal_building_count
         ):
-            if self.can_afford(UnitTypeId.BARRACKS): await self.build(UnitTypeId.BARRACKS, near=self.cc.position.towards(self.game_info.map_center, 8))
+            # await self.build(UnitTypeId.BARRACKS, near=self.cc.position.towards(self.game_info.map_center, 8))
+            rax_pos = await self.find_placement(UnitTypeId.BARRACKS, near=self.cc.position.towards(self.game_info.map_center, 8))
+            self.workers.gathering.closest_to(rax_pos).build(UnitTypeId.BARRACKS, rax_pos)
         # Then Factory
-        elif self.tech_requirement_progress(UnitTypeId.FACTORY) == 1 and self.already_pending(UnitTypeId.FACTORY) + self.structures.of_type({UnitTypeId.FACTORY, UnitTypeId.FACTORYFLYING}).ready.amount < self.get_ideal_building_count("FACTORY"):
-            if self.can_afford(UnitTypeId.FACTORY):
-                await self.build(UnitTypeId.FACTORY, near=self.cc.position.towards(self.game_info.map_center, 8))
+        elif (
+            self.can_afford(UnitTypeId.FACTORY)
+            and self.tech_requirement_progress(UnitTypeId.FACTORY) == 1
+            and self.already_pending(UnitTypeId.FACTORY) + self.structures.of_type({UnitTypeId.FACTORY, UnitTypeId.FACTORYFLYING}).ready.amount < self.get_ideal_building_count("FACTORY")
+        ):
+            await self.build(UnitTypeId.FACTORY, near=self.cc.position.towards(self.game_info.map_center, 8))
         # Then Starport
-        elif self.tech_requirement_progress(UnitTypeId.STARPORT) == 1 and self.already_pending(UnitTypeId.STARPORT) + self.structures.of_type({UnitTypeId.STARPORT, UnitTypeId.STARPORTFLYING}).ready.amount < self.get_ideal_building_count("STARPORT"):
-            if self.can_afford(UnitTypeId.STARPORT):
-                await self.build(UnitTypeId.STARPORT, near=self.cc.position.towards(self.game_info.map_center, 8))
+        elif (
+            self.can_afford(UnitTypeId.STARPORT)
+            and self.tech_requirement_progress(UnitTypeId.STARPORT) == 1
+            and self.already_pending(UnitTypeId.STARPORT) + self.structures.of_type({UnitTypeId.STARPORT, UnitTypeId.STARPORTFLYING}).ready.amount < self.get_ideal_building_count("STARPORT")
+        ):
+            await self.build(UnitTypeId.STARPORT, near=self.cc.position.towards(self.game_info.map_center, 8))
         # Then Barracks
         elif (
             self.can_afford(UnitTypeId.BARRACKS)
@@ -724,23 +753,25 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 break  # so that it doesn't queue two refineries at once
 
     async def build_depots(self):
-        if (self.can_afford(UnitTypeId.SUPPLYDEPOT)
+        # self.depot_placement_positions is a list of two positions to build depots at (near the ramp)
+        if (  # if we want to build a depot...
+            self.can_afford(UnitTypeId.SUPPLYDEPOT)
             and self.already_pending(UnitTypeId.SUPPLYDEPOT) < self.get_simultaneous_depot_count()
             and self.supply_cap < 200
         ):
-            # First two depots go in specific locations:
-            workers: Units = self.workers.gathering
-            if len(self.depot_placement_positions) == 2:  # first depot
-                    target_depot_location: Point2 = self.depot_placement_positions.pop()
-                    worker: Unit = workers.closest_to(target_depot_location)  # used to be workers.random
-                    worker.build(UnitTypeId.SUPPLYDEPOT, target_depot_location)
-            elif len(self.depot_placement_positions) == 1:  # second depot
-                if self.townhalls.amount >= self.get_ideal_building_count('COMMANDCENTER') and self.supply_army + self.supply_workers >= 21:  # second depot (or wait for expo)
-                    target_depot_location: Point2 = self.depot_placement_positions.pop()
-                    worker: Unit = workers.closest_to(target_depot_location)  # used to be workers.random
-                    worker.build(UnitTypeId.SUPPLYDEPOT, target_depot_location)
-            # Then they go wherever
-            if len(self.depot_placement_positions) == 0:
+            if len(self.depot_placement_positions) == 2:  # first depot goes near ramp
+                target_depot_location: Point2 = self.depot_placement_positions.pop()  # pop location from list
+                w = self.workers.collecting.closest_to(target_depot_location)  # get nearby worker
+                w.build(UnitTypeId.SUPPLYDEPOT, target_depot_location)  # nearby worker build depot at target location
+            elif len(self.depot_placement_positions) == 1:  # same for second depot
+                if (  # wall fast if being cheesed, otherwise wait until natural is started
+                    self.beingcheesed
+                    or (self.townhalls.amount >= self.get_ideal_building_count('COMMANDCENTER') and self.supply_army + self.supply_workers >= 21)
+                ):
+                    target_depot_location: Point2 = self.depot_placement_positions.pop()  # pop location from list
+                    w = self.workers.collecting.closest_to(target_depot_location)  # get nearby worker
+                    r = w.build(UnitTypeId.SUPPLYDEPOT, target_depot_location)  # nearby worker build depot at target location
+            elif len(self.depot_placement_positions) == 0:  # # other depots can go wherever
                 await self.build(UnitTypeId.SUPPLYDEPOT, near=self.cc.position.towards(self.game_info.map_center, 8))
                 return
                 
@@ -957,6 +988,12 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                     if self.can_afford(UnitTypeId.REAPER):
                         rax.train(UnitTypeId.REAPER)
                         self.built_reaper = True  # TODO: always have 1 reaper until the opponent is on 3+ bases
+                elif (
+                    self.time > 270  # after 4:30
+                    and len(self.opponent_info["expansions"]) < 3  # haven't scouted opponent's third
+                    and not self.units.of_type(REAPER)  # don't already have a reaper
+                ):
+                    if self.can_afford(UnitTypeId.REAPER): rax.train(UnitTypeId.REAPER)
                 else:
                     if self.can_afford(UnitTypeId.MARINE): rax.train(UnitTypeId.MARINE)
             if rax.has_reactor and len(rax.orders) < 2:  # not elif
@@ -1008,6 +1045,15 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             # value_gas += self.calculate_unit_value(this_unit.type_id).vespene
             value_minerals += udict['value_minerals']
             value_gas += udict['value_gas']
+        return (value_minerals, value_gas)
+
+    def get_army_value(self):
+        value_minerals = 0
+        value_gas = 0
+        for unit in self.units:
+            if unit.type_id not in {SCV, MULE} and not unit.is_structure:
+                value_minerals += self.calculate_unit_value(unit.type_id).minerals
+                value_gas += self.calculate_unit_value(unit.type_id).vespene
         return (value_minerals, value_gas)
 
     def get_attack_length(self, reset=False):
@@ -1090,7 +1136,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         th = self.townhalls.amount
         adjusted_time = self.time - (self.my_stats['workers_lost'] * 5) - (self.get_resources_lost('diff') / 200)
         if building == "COMMANDCENTER":
-            if self.beingcheesed: adjusted_time -= 60  # take natural 60 seconds later 
+            if self.beingcheesed: adjusted_time -= 70  # take natural 70 seconds later 
             elif self.be_aggressive and th >= 2: adjusted_time -= 60  # take 3rd 60 seconds later
 
             if adjusted_time < 100: return 1    # 1:40
@@ -1107,7 +1153,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             elif th == 4: ib = 7
             elif th == 5: ib = 10
             else: ib = 15
-            if self.beingcheesed and th == 1: ib += 1
+            if self.beingcheesed and self.townhalls.ready.amount == 1: ib += 1
             if self.townhalls.ready.amount >= 2 and self.be_aggressive: ib += 2  # 2 more rax on 2+ bases
             return ib
         elif building == "FACTORY":
@@ -1227,8 +1273,11 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         rl_timer = "Recently Lost:      " + str(self.total_value_lost)
         self._client.debug_text_screen(text=rl_timer, pos=Point2((0, 0.20)), color=None, size=8)
 
-        cheesecheck = "Being Cheesed?      " + str(self.beingcheesed)
-        self._client.debug_text_screen(text=cheesecheck, pos=Point2((0, 0.21)), color=None, size=8)
+        their_av = "Hostile Army Value:  " + str(self.get_enemy_army_value())
+        self._client.debug_text_screen(text=their_av, pos=Point2((0, 0.21)), color=None, size=8)
+
+        our_av = "Friendly Army Value: " + str(self.get_army_value())
+        self._client.debug_text_screen(text=our_av, pos=Point2((0, 0.22)), color=None, size=8)
 
         
         self._client.debug_text_world("RALLY", Point3((self.get_rally_point().x, self.get_rally_point().y, self.get_terrain_z_height(self.get_rally_point()))), size=12)
@@ -1304,6 +1353,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         print(self.my_stats)
         print("Game ended.")
         if self.make_log:
+            self.logfile.write(f"{self.my_stats}\n")
+            if self.surrendernow:
+                self.logfile.write("Surrendered. Can't win 'em all. \n")
             self.logfile.write("Deckard exited nicely. \n")
             self.logfile.close()
 

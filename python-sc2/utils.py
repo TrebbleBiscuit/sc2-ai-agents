@@ -1,3 +1,8 @@
+from sc2.ids.unit_typeid import *
+from sc2.ids.ability_id import *
+from sc2.unit import Unit
+from sc2.units import Units
+
 class OpponentInfo:
     def __init__(self):
         self.workers_lost = 0
@@ -75,19 +80,50 @@ class ArmyGroup:
     def __init__(self, bot):
         self.bot = bot
         self.unit_tags = set()
+        self.state = "IDLE"
+        self.attack_position = self.bot.enemy_start_locations[0]
+        #self.respond_to_nearby_threats = True
     
-    def get_units(self):
-        return self.bot.units.tags_in(self.unit_tags)
+    def set_state(self, s):
+        assert s in ["IDLE", "ATTACKING"]  # possible states
+        self.state = s
+    
+    def trigger_attack(self, pos=None):
+        if pos: self.attack_position = pos
+        self.state = "ATTACKING"
+        for u in self.get_units(): u.attack(self.attack_position)  # sends all forces, even if doing something else
+        self.do_state()
+    
+    def end_attack(self):
+        self.state = "IDLE"
+
+    def do_state(self):  # this should be called often
+        if self.state == "IDLE":
+            pass
+        elif self.state == "ATTACKING":
+            for u in self.get_units().idle:  # only sends idle forces
+                u.attack(self.attack_position)
+        else:
+            raise Exception  # invalid state for ArmyGroup
+    
+    def get_units(self, of_type=None):
         """
-        TODO: will this actually work? I'm passing the as an argument to this class, then using bot.units.
-        The question is whether or not bot.units will update. I think it should, as we're just referencing the bot
-        and not actually creating an instance of the bot class... hopefully...
+        Returns a Units object.
+        of_type (optional) - a {set} of UnitTypeIds (i.e. MARINE) or single UnitTypeId
         """
+        if of_type:
+            assert isinstance(of_type, set) or isinstance(of_type, UnitTypeId)
+        if self.bot.units:
+            return_units = self.bot.units.tags_in(self.unit_tags)
+            if of_type:
+                return return_units.of_type(of_type)
+            else:
+                return return_units
 
     def add_to(self, to_add):
         """
         Input: Units, Unit, tag or list
-        Add to this army group
+        Add to this army group if not already added
         """
         if isinstance(to_add, Units):  # if units object, feed each unit back in
             for unit in to_add:
@@ -95,10 +131,29 @@ class ArmyGroup:
         elif isinstance(to_add, Unit):  # if unit, convert to tag and feed back in       
             self.add_to(to_add.tag)
         elif isinstance(to_add, int):  # if tag, save to set
-            if to_add not in self.threats:
+            if to_add not in self.unit_tags:
                 self.unit_tags.add(to_add)
         elif isinstance(to_add, list):  # if list, iterate and feed back in
-            for e in to_add:
+            for e in to_add:  # e could be a tag or a unit
                 self.add_to(e)
+        else: raise Exception  # invalid argument type in ArmyGroup.add_to()
+    
+    def remove_from(self, to_rm):
+        """
+        Input: Units, Unit, tag or list
+        Remove from this army group if a member
+        """
+        if isinstance(to_rm, Units):  # if units object, feed each unit back in
+            for unit in to_rm:
+                self.remove_from(unit)
+        elif isinstance(to_rm, Unit):  # if unit, convert to tag and feed back in       
+            self.remove_from(to_rm.tag)
+        elif isinstance(to_rm, int):  # if tag, save to set
+            if to_rm not in self.unit_tags:
+                self.unit_tags.discard(to_rm)  # discard instead of remove because we don't want an exception if the tag isn't in the group
+        elif isinstance(to_rm, list):  # if list, iterate and feed back in
+            for e in to_rm:
+                self.remove_from(e)
+        else: raise Exception  # invalid argument type in ArmyGroup.remove_from()
 
 
