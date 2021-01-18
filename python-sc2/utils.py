@@ -63,6 +63,12 @@ class OpponentInfo:
         return (value_minerals, value_gas)
 
     def get_unit_composition(self):
+        """
+        types_list = []
+        for unit in :
+            types.list.append(unit.type_id)
+
+        """
         pass
 
 
