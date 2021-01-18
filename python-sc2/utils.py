@@ -11,6 +11,7 @@ class OpponentInfo:
         self.expansions = {
             tag : {
                 'is_main': <boolean>,
+                'position': <position>,
                 'created': <game seconds float>,
                 'finished': <game seconds float>
             }
@@ -30,10 +31,61 @@ class OpponentInfo:
     
     def add_expansion(self, expo):
         pass
+        """
+        Assumes every existing enemy townhall is already an entry in self.expansions
+        Call this function in on_enemy_unit_entered_vision() to make sure everything's always as recent as possible  (???)
+
+        i dont even know what's going on
+        """
+
+        """
+        assert isinstance(to_add, Unit):
+        if expo.tag already in self.expansions:  # this townhall already in expansions
+            return
+        elif (
+            len(self.opponent_info["expansions"]) > 0  # at least 1 expansion recorded on list
+            and expo.position.closest([self.expansions[tag]['position'] for tag in self.expansions]).distance_to(expo.position) < 2  # this expo is in the same place as the one on the list
+        ):  # TODO: ^^^ test this monstrosity
+            closest_expo_tag = expo.position.closest([self.expansions[tag]['position'] for tag in self.expansions]).tag
+            self.expansions[expo.tag]['is_main'] = 
+            self.expansions[expo.tag]['position']
+            self.expansions[expo.tag]['created'] = 
+            self.expansions[expo.tag]['finished'] = 
+            self.expansions.pop(expo.position.closest(self.expansions))  # remove old expo from the list, replace with this one
         # pass it a unit object and it will populate all the relevant dictionary fields
         # check if expo at same position is already in list
         # if so, copy its information into the new tag and delete the old tag
-    
+
+
+
+        for th in enemy_townhalls:
+            if th in self.opponent_info['expansions']:  # this th already in set
+                continue
+            if len(self.opponent_info["expansions"]) > 0 and th.position.closest(self.opponent_info["expansions"]).distance_to(th.position) < 2:  # the townhall in question very close to one already in the list
+                # this is here b/c a command center and an orbital would otherwise show up as different expansions
+                self.opponent_info['expansions'].remove(th.position.closest(self.opponent_info["expansions"]))  # remove old expansion from set
+                self.opponent_info['expansions'].add(th)  # add new expansion
+            else:  # new expansion!
+                self.opponent_info["expansions"].add(th)
+                print("found a new enemy base!")
+                if th.build_progress < 1:
+                    print(f"its build progress is {th.build_progress}")
+                    started_at = self.time - (th.build_progress * 71)
+                    finish_at = self.time + ((1 - th.build_progress) * 71)
+                    print(f"current game time is {self.time}")
+                    print(f"scouted townhall was started at time {started_at}")
+                    print(f"scouted townhall will finish at time {finish_at}")
+                if th.position in self.expansion_locations_list:
+                    print("expansion is at an expected location")
+                else:
+                    print("expansion is at an UNEXPECTED LOCATION")
+        """
+
+    def check_expansions(self):
+        """
+        Checks enemy structures, if there is no tag for an entry on our expansion list, delete it
+        """
+
     def add_unit(self, unit):
         self.army_units[unit.tag] = {
             'type_id': unit.type_id,
@@ -53,7 +105,7 @@ class OpponentInfo:
         # self.calculate_supply_cost(enemyunit.type_id)  #
         # calculate_supply_cost doesn't behave as expected, see documentation and fix
 
-    def get_army_value(self):
+    def get_army_value(self, f='tuple'):
         value_minerals = 0
         value_gas = 0
         for tag, udict in self.army_units.items():
@@ -76,6 +128,12 @@ class OpponentInfo:
 
 class ArmyGroup:
     """
+    Army groups allow control of an individual group of units
+
+    Units in an army group are generally organized such that they all follow the same behavior
+    i.e. all units in the marine army group focus banelings when they're nearby
+    while all units in the marauder army group focus lurkers first
+
     Usage in bot class:
         self.my_army = ArmyGroup(self)
         self.my_army.add_to(self.forces)  # add to army
@@ -89,6 +147,9 @@ class ArmyGroup:
         self.state = "IDLE"
         self.attack_position = self.bot.enemy_start_locations[0]
         #self.respond_to_nearby_threats = True
+        self.target_fire_units = set()
+        # Marine - {BANELING, INFESTOR, HIGHTEMPLAR, DARKTEMPLAR}
+        # Marauder - {}
     
     def set_state(self, s):
         assert s in ["IDLE", "ATTACKING"]  # possible states
@@ -97,7 +158,7 @@ class ArmyGroup:
     def trigger_attack(self, pos=None):
         if pos: self.attack_position = pos
         self.state = "ATTACKING"
-        for u in self.get_units(): u.attack(self.attack_position)  # sends all forces, even if doing something else
+        #for u in self.get_units(): u.attack(self.attack_position)  # sends all forces, even if doing something else
         self.do_state()
     
     def end_attack(self):

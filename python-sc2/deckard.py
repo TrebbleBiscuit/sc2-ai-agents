@@ -124,6 +124,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         if iteration == 0:  # All the stuff to do exactly once when the game starts
             self.depot_placement_positions: Set[Point2] = self.main_base_ramp.corner_depots
             assert len(self.depot_placement_positions) == 2
+            # set these positions for ramp depots to be used later
+            self.depot_r1 = self.depot_placement_positions.pop()
+            self.depot_r2 = self.depot_placement_positions.pop()
             # Uncomment the following if you want to build 3 supply depots in the wall instead of a barracks in the middle + 2 depots in the corner
             # self.depot_placement_positions = self.main_base_ramp.corner_depots | {self.main_base_ramp.depot_in_middle}
             self.barracks_placement_position: Point2 = self.main_base_ramp.barracks_correct_placement
@@ -136,8 +139,15 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         if iteration == 5:
             await self.chat_send(" Deckard. B26354. GLHF.")
 
-        # If there is no (landed) CC and under 10 workers, concede
-        if self.supply_workers < 10 and not self.townhalls:
+        # surrender conditions
+        if (
+            self.supply_workers < 10 and not self.townhalls
+            or (
+                self.townhalls.amount + 2 < len(self.opponent_info['expansions'])  # enemy has 3+ more townhalls than we do
+                and self.get_enemy_army_value('value') > self.get_army_value('value') * 3  # scouted enemy army value is triple ours
+                and self.get_army_value('value') < 800  # army is small
+                )
+        ):
             if not self.willsurrender:
                 if not self.basetrade:
                     await self.chat_send("That hurt.")
@@ -162,17 +172,18 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 await self._client.leave()
 
         if iteration % 4 == 0:  # Do less frequently
-            await self.distribute_workers()             # will distribute workers between bases, minerals, and gas geysers efficiently
+            await self.distribute_workers(resource_ratio=2) # will distribute workers between bases, minerals, and gas geysers semi-efficiently
         if iteration % 8 == 0:  # Do even less frequently
-            await self.repair_damaged_buildings()       # will send 1 scv to damaged buildings to help repair every time it is run
+            await self.repair_damaged_buildings()           # will send 1 scv to damaged buildings to help repair every time it is run
         if iteration % 30 == 0:  # Do much less frequently
-            await self.finish_constructing_buildings()  # will send 1 scv to incomplete, halted building every time it is run
-            await self.handle_scouted_information()
+            await self.finish_constructing_buildings()      # will send 1 scv to incomplete, halted building every time it is run
+            
 
         # Macro
         await self.manage_spending()                # spend money
         await self.manage_orbital_energy()          # manage orbital energy
         await self.army_movement(iteration)         # manage non-worker units
+        await self.handle_scouted_information()     # 
 
         # Micro
         await self.ability_siege_tanks()            # use siege/unsiege ability
@@ -182,6 +193,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         await self.micro_marines()                  # control marines
         await self.micro_reaper()                   # control reaper and scout
         await self.scv_scout()                      # 17 scout with SCV
+        # await self.cancel_buildings()               # TODO: cancel buildings in production
         # await self.react_to_scouting()              # TODO: store and utilize scouting information
 
         self.showdebuginfo(iteration)               # show debug information in-game
@@ -261,7 +273,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 ### Above functions are called by the game, below functions are called by the above functions ###
 
     async def army_movement(self, iteration):
-        self.forces: Units = self.units.of_type({MARINE, MARAUDER, SIEGETANK})
+        self.forces: Units = self.units.of_type({MARINE, MARAUDER, SIEGETANK, HELLION})
         self.flier: Units = self.units(UnitTypeId.VIKINGFIGHTER)
         medivacs: Units = self.units(UnitTypeId.MEDIVAC)  # TODO: if medivac movement target is far away, boost
         ravens: Units = self.units(UnitTypeId.RAVEN)
@@ -333,11 +345,20 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             self.attack_end_time -= 60  # so that the attack and defend cooldowns aren't happening at the same time
             for unit in self.forces:
                 unit.attack(self.get_base_target())
-        elif self.time < self.attack_start_time + self.get_attack_length():
-            # continue attack
+        # elif self.time < self.attack_start_time + self.get_attack_length():
+        elif self.army_mood == "ATTACK":
+        ##### continue attack
             if not self.announced_efficiency and self.attack_length + 50 < self.get_attack_length():
                 await self.chat_send("Come on. I'm right here, but you've got to shoot straight.")
+                print("we're trading very efficiently here")
                 self.announced_efficiency = True
+            for u in self.forces:
+                nearby_threats = self.enemy_units.closer_than(40, u)  # enemy units nearby
+                if nearby_threats:
+                    if iteration % 5 == 0:  # TODO: do this by time_since instead?
+                        u.attack(nearby_threats.closest_to(u).position)  # attack towards the nearest threat
+                elif u.is_idle:
+                    u.attack(self.get_base_target())  # otherwise if idle attack towards normal target
             if iteration % 5 == 0:
                 for unit in self.forces.idle:  # only sends idle forces! 
                     unit.attack(self.get_base_target())
@@ -352,8 +373,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             self.attack_start_time -= 60  # so that the attack and defend cooldowns aren't happening at the same time
             for unit in self.forces:
                 unit.attack(self.get_rally_point())
-        elif self.time > self.attack_start_time + self.get_attack_length():
-            # continue defense
+        # elif self.time > self.attack_start_time + self.get_attack_length():
+        elif self.army_mood == "DEFEND":
+        ##### continue defense
             if iteration % 6 == 0:
                 threats = self.enemy_units.closer_than(60, self.start_location)  # TODO: make proper threats by getting hostile units close to our expansions and eventually sensor tower blips
                 for unit in self.forces:
@@ -362,6 +384,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                         unit.attack(hostiles.closest_to(unit))  # attack the hostile closest to the unit
                     elif threats:  # if threats near our bases exist - threats are secondary to hostiles
                         for unit in self.forces.idle: unit.attack(threats.random.position)
+                    elif len(self.forces) < 5:  # few forces exist
+                        continue  # stay where you are (probably near rax)
                     elif unit.is_idle:  # chill at get_rally_point()
                         if iteration % 12 == 0:
                             unit.attack(self.get_rally_point())
@@ -372,17 +396,18 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         if cant build addons, don't train units
         if can't upgrade orbital, don't train workers
         """
-        await self.upgrade_command_center()
+        if await self.upgrade_command_center() == "cant_afford":
+            return  # always save money to do this first
         await self.train_workers()
         await self.expand()
         await self.build_depots()
         await self.build_addons()  # must be before unit training so that buildings build addons first
         await self.train_from_barracks()
-        if (  # If the conditions are met to expand but we haven't yet, save money to do so.
-            self.townhalls.amount >= self.get_ideal_building_count("COMMANDCENTER")
-            or self.already_pending(UnitTypeId.COMMANDCENTER)
-            or self.enemy_units and self.townhalls.amount == 1
-            # TODO: or enemy army value is bigger than ours?
+        if (  # If NONE of these conditions are true, SAVE MONEY to expand.
+            self.townhalls.ready.amount >= self.get_ideal_building_count("COMMANDCENTER")  # don't want to expand
+            or self.already_pending(UnitTypeId.COMMANDCENTER)  # already queued command center
+            or self.enemy_units and self.townhalls.amount == 1  # enemy units nearby and we're on 1base
+            or self.get_enemy_army_value('value') > self.get_army_value('value') * 1.1  # scouted enemy army value is much greater than ours
         ):
             await self.train_from_factory()
             await self.train_from_starport()
@@ -413,7 +438,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                     print(f"scouted townhall was started at time {started_at}")
                     print(f"scouted townhall will finish at time {finish_at}")
                 if th.position in self.expansion_locations_list:
-                    print("expansion is at an expected location")
+                    pass
+                    # print("expansion is at an expected location")
                 else:
                     print("expansion is at an UNEXPECTED LOCATION")
                 #print(self.opponent_info["expansions"])
@@ -429,20 +455,25 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         # now for non-townhall buildings
         if not self.scouted_pool:
             for pool in self.enemy_structures.of_type(SPAWNINGPOOL):
-                print("found an enemy spawning pool!")
+                self.scouted_pool = True
+                print("found the enemy spawning pool!")
                 print(f"its build progress is {pool.build_progress}")
                 started_at = self.time - (pool.build_progress * 71)
                 finish_at = self.time + ((1 - pool.build_progress) * 71)
                 print(f"current game time is {self.time}")
                 print(f"scouted pool was started at time {started_at}")
                 print(f"scouted pool will finish at time {finish_at}")
-                if started_at < 30:  # TODO: tune this, the pool will already be done when the SCV gets there so...
+                if started_at < 36 and not self.beingcheesed:  # TODO: tune this, the pool will already be done when the SCV gets there so...
                     self.beingcheesed = True
-                self.scouted_pool = True
+                    self.attack_norush_period += 80  # delay timing attack
+                    print("ling flood inc")
+                    await self.chat_send("nice pool lol")
         # now for units
         if not self.beingcheesed:
             if self.time < 120 and self.enemy_units.of_type(ZERGLING):  # under 2:00, scout lings
                 self.beingcheesed = True
+                print("ling flood inc")
+                self.attack_norush_period += 80  # delay timing attack
                 await self.chat_send("Not very sporting to fire on an unarmed opponent.")
                 # TODO: elif we spot pool before overlord
 
@@ -544,8 +575,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             threatening_units = self.enemy_units.exclude_type({LARVA, OVERLORD, OBSERVER, OVERSEER, CHANGELING, CHANGELINGMARINE, CHANGELINGMARINESHIELD})  # units we're not scared of
             if threatening_units:
                 closest_enemy = threatening_units.closest_to(r)  # need to define this here so we can check it on the next if and then use it more later
-                if r.distance_to(closest_enemy) < 8:  # (not elif) enemy nearby
-                    dist_to_run = random.uniform(3.5, 5.5)  # randomize a bit so the reaper gets stuck less often
+                if r.distance_to(closest_enemy) < 8.5:  # (not elif) enemy nearby
+                    dist_to_run = random.uniform(2.5, 4.5)  # randomize a bit so the reaper gets stuck less often
                     r.move(r.position.towards(closest_enemy, -dist_to_run))  # run away from enemy
                     dist_to_run = random.uniform(10, 15)
                     r.move(r.position.towards(self.sorted_expo_locations[0], dist_to_run), queue=True)  # run towards home TODO: run towards random owned expo
@@ -562,7 +593,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 
     async def ability_interference_matrix(self):
         for raven in self.units(UnitTypeId.RAVEN):
-            targets = self.enemy_units.of_type({COLOSSUS, MOTHERSHIP, SIEGETANKSIEGED, BATTLECRUISER, VIPER, INFESTOR}).closer_than(16, raven)
+            targets = self.enemy_units.of_type({COLOSSUS, MOTHERSHIP, SIEGETANKSIEGED, BATTLECRUISER, VIPER, INFESTOR, ULTRALISK}).closer_than(16, raven)
             if targets:
                 target = targets.closest_to(raven)  # TODO: filter by health percent, etc
                 abilities = await self.get_available_abilities(raven)
@@ -629,16 +660,24 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
     
     async def build_addons(self):
         # Rax: 1 Reactor, 2 Lab, 3 Reactor, 4 Reactor, 5 Lab, 6+ Reactor
-        # TODO: change this dependong on opponentn race and unit composition
+        # TODO: change this dependong on opponent race and unit composition
         # use self.get_ideal_building_count('BARRACKSREACTOR') and self.get_ideal_building_count('BARRACKSTECHLAB')
-        if not self.built_reaper: return  # won't build add-ons until after reaper is made
+        
+        # if not self.built_reaper: return  # won't build add-ons until after reaper is made
         for rax in self.structures(UnitTypeId.BARRACKS).ready.idle:
-            if (
+            if (  # conditions to build an add-on:
                 not rax.has_add_on
-                and not self.enemy_units.closer_than(8, rax.position)  # build units instead if there are nearby hostiles
+                # and not self.enemy_units.closer_than(8, rax.position)  # build units instead if there are nearby hostiles
+                # excluding this for now bc it wont build addons to finish a wall. 
+                # TODO: if rax is at self.main_base_ramp.barracks_correct_placement
             ):
                 addon_position: Point2 = rax.position + Point2((2.5, -0.5))
-                if not (await self.can_place(UnitTypeId.SUPPLYDEPOT, addon_position)): rax(AbilityId.LIFT)  # if an addon won't fit, lift
+                # TODO: ONLY LIFT IF THERE ARE NO ENEMY UNITS NEARBY
+                if (
+                    not await self.can_place(UnitTypeId.SUPPLYDEPOT, addon_position)  # can't place an addon here
+                    and not rax.position.distance_to(self.main_base_ramp.barracks_correct_placement) > 2  # rax isn't the one in the wall
+                ):
+                    rax(AbilityId.LIFT)  # if an addon won't fit, lift
                 elif self.already_pending(UnitTypeId.BARRACKSREACTOR) + self.structures(UnitTypeId.BARRACKSREACTOR).ready.amount < 1:  # no reactors exist
                     if self.can_afford(UnitTypeId.BARRACKSREACTOR): rax.build(UnitTypeId.BARRACKSREACTOR)  # build reactor first
                 elif self.already_pending(UnitTypeId.BARRACKSTECHLAB) + self.structures(UnitTypeId.BARRACKSTECHLAB).ready.amount < 1:  # no tech labs exist
@@ -755,28 +794,42 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                     break  # so that it doesn't queue two refineries at once
 
     async def build_depots(self):
-        # self.depot_placement_positions is a list of two positions to build depots at (near the ramp)
+        depot_r1 = self.depot_r1  # TODO clean this up
+        depot_r2 = self.depot_r2
+        #print(depot_r1)
+        #print(depot_r2)
+        # self.depot_placement_positions is a set of two positions to build depots at (near the ramp)
         if (  # if we want to build a depot...
             self.can_afford(UnitTypeId.SUPPLYDEPOT)
             and self.already_pending(UnitTypeId.SUPPLYDEPOT) < self.get_simultaneous_depot_count()
             and self.supply_cap < 200
         ):
-            if len(self.depot_placement_positions) == 2:  # first depot goes near ramp
-                target_depot_location: Point2 = self.depot_placement_positions.pop()  # pop location from list
+            # elif len(self.depot_placement_positions) == 2:
+            if (
+                not self.structures.of_type({SUPPLYDEPOT, SUPPLYDEPOTLOWERED})  # no supply depots exist
+                or not depot_r1.closest(self.structures.of_type({SUPPLYDEPOT, SUPPLYDEPOTLOWERED})).distance_to(depot_r1) < 1  # not already a depot in this spot
+            ):
+                # target_depot_location: Point2 = self.depot_placement_positions.pop()  # pop location from list
+                target_depot_location = depot_r1
                 w = self.workers.collecting.closest_to(target_depot_location)  # get nearby worker
                 w.build(UnitTypeId.SUPPLYDEPOT, target_depot_location)  # nearby worker build depot at target location
-            elif len(self.depot_placement_positions) == 1:  # same for second depot
+                print('just tried to build 1st depot')
+            elif not depot_r2.closest(self.structures.of_type({SUPPLYDEPOT, SUPPLYDEPOTLOWERED})).distance_to(depot_r2) < 1:  # same for second depot
                 if (  # wall fast if being cheesed, otherwise wait until natural is started
                     self.beingcheesed
                     or (self.townhalls.amount >= self.get_ideal_building_count('COMMANDCENTER') and self.supply_army + self.supply_workers >= 21)
                 ):
-                    target_depot_location: Point2 = self.depot_placement_positions.pop()  # pop location from list
-                    w = self.workers.collecting.closest_to(target_depot_location)  # get nearby worker
+                    # self.main_base_ramp.corner_depots[0]
+                    # target_depot_location: Point2 = self.depot_placement_positions.pop()  # pop location from list
+                    target_depot_location = depot_r2
+                    w = self.workers.gathering.closest_to(target_depot_location)  # get nearby worker TODO: switched collecting to gathering, will that fix bug?
                     w.build(UnitTypeId.SUPPLYDEPOT, target_depot_location)  # nearby worker build depot at target location
+                    print('just tried to build 2nd depot')
             elif len(self.depot_placement_positions) == 0:  # # other depots can go wherever
                 depot_pos = await self.find_placement(UnitTypeId.BARRACKS, near=self.townhalls.random.position.towards(self.game_info.map_center, 8))
                 w = self.workers.collecting.closest_to(depot_pos)
                 w.build(UnitTypeId.SUPPLYDEPOT, depot_pos)
+                # print('just tried to build another depot')
 
     async def build_upgrade_buildings(self):
         # Engineering Bays
@@ -993,6 +1046,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 await self.chat_send("You show it to your husband. He likes it so much he hangs it on your bedroom wall.")
 
     async def train_workers(self):
+        # TODO: if command center (not orbital) and we have a rax, don't build workers (wait for orbital instead)
         for cc in self.townhalls:
             if (
                 self.can_afford(UnitTypeId.SCV)
@@ -1031,6 +1085,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 fac.train(UnitTypeId.SIEGETANK)
             elif self.can_afford(UnitTypeId.THOR) and self.units(UnitTypeId.THOR).amount + self.already_pending(UnitTypeId.THOR) < self.get_ideal_unit_count("THOR"):
                 fac.train(UnitTypeId.THOR)
+            elif self.can_afford(UnitTypeId.HELLION) and self.beingcheesed and self.time < 240:
+                fac.train(UnitTypeId.HELLION)
 
     async def train_from_starport(self):
         for sp in self.structures(UnitTypeId.STARPORT).ready:
@@ -1059,7 +1115,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             if not self.enemy_units.closer_than(40, self.start_location) or self.townhalls.amount > 1:
                 await self.expand_now()
 
-    def get_enemy_army_value(self):
+    def get_enemy_army_value(self, f='res'):
+        assert f in ['res', 'value']  # 'resources' (min, gas) or 'value' (int)
         value_minerals = 0
         value_gas = 0
         for tag, udict in self.opponent_info['army_units_scouted'].items():
@@ -1067,16 +1124,23 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             # value_gas += self.calculate_unit_value(this_unit.type_id).vespene
             value_minerals += udict['value_minerals']
             value_gas += udict['value_gas']
-        return (value_minerals, value_gas)
+        if f == 'res':
+            return (value_minerals, value_gas)
+        elif f == 'value':
+            return value_minerals + (value_gas * self.mineral_gas_ratio)
 
-    def get_army_value(self):
+    def get_army_value(self, f='res'):
+        assert f in ['res', 'value'] 
         value_minerals = 0
         value_gas = 0
         for unit in self.units:
             if unit.type_id not in {SCV, MULE} and not unit.is_structure:
                 value_minerals += self.calculate_unit_value(unit.type_id).minerals
                 value_gas += self.calculate_unit_value(unit.type_id).vespene
-        return (value_minerals, value_gas)
+        if f == 'res':
+            return (value_minerals, value_gas)
+        elif f == "value":
+            return value_minerals + (value_gas * self.mineral_gas_ratio)
 
     def get_attack_length(self, reset=False):
         if reset:
@@ -1088,7 +1152,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
         self.total_value_killed = (self.value_killed_minerals - self.value_killed_minerals_base) + (self.mineral_gas_ratio * (self.value_killed_vespene - self.value_killed_vespene_base))
         self.total_value_lost = (self.value_lost_minerals - self.value_lost_minerals_base) + (self.mineral_gas_ratio * (self.value_lost_vespene - self.value_lost_vespene_base))
         
-        return self.attack_length + (self.total_value_killed - self.total_value_lost)/80
+        value_calc = self.attack_length + (self.total_value_killed - self.total_value_lost)/80
+        return value_calc
     
     def get_attack_downtime(self, reset=False):
         if reset:
@@ -1161,12 +1226,14 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             if self.beingcheesed: adjusted_time -= 70  # take natural 70 seconds later 
             elif self.be_aggressive and th >= 2: adjusted_time -= 60  # take 3rd 60 seconds later
 
-            if adjusted_time < 100: return 1    # 1:40
-            elif adjusted_time < 330: return 2  # 5:30
-            elif adjusted_time < 560: return 3  # 9:20
-            elif adjusted_time < 690: return 4  # 11:30
-            elif adjusted_time < 840: return 5  # 14:00
-            else: return 6
+            if adjusted_time < 100: ccc = 1    # 1:40
+            elif adjusted_time < 330: ccc = 2  # 5:30
+            elif adjusted_time < 560: ccc = 3  # 9:20
+            elif adjusted_time < 690: ccc = 4  # 11:30
+            elif adjusted_time < 840: ccc = 5  # 14:00
+            else: ccc = 6
+            if self.minerals > 1200: ccc += 1
+            return ccc
         elif building == "BARRACKS":
             if th == 1: ib = 1
             elif self.townhalls.ready.amount == 2: ib = 3
@@ -1175,8 +1242,11 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             elif th == 4: ib = 7
             elif th == 5: ib = 10
             else: ib = 15
-            if self.beingcheesed and self.townhalls.ready.amount == 1: ib += 1
+            if self.beingcheesed and self.time > 100 and self.townhalls.ready.amount == 1: ib += 1
             if self.townhalls.ready.amount >= 2 and self.be_aggressive: ib += 2  # 2 more rax on 2+ bases
+            if self.minerals > 700:
+                if self.time < 360: ib += 1
+                else: ib += 2
             return ib
         elif building == "FACTORY":
             if th < 5 and self.structures.of_type(UnitTypeId.BARRACKS).amount >= 1: return 1  # rax finished
@@ -1187,6 +1257,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             else: return 3
         elif building == "REFINERY":
             if not self.structures.of_type({SUPPLYDEPOT, SUPPLYDEPOTLOWERED}): return 0  # until supply depot started
+            elif th < 2 and self.beingcheesed: return 2
             elif th < 2: return th
             elif self.townhalls.ready.amount == 2: return 3
             elif th == 2: return th
@@ -1377,7 +1448,10 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 
     def on_end(self, result):  # Do things here after the game ends
         print(self.my_stats)
+        print("self.opponent_info['army_units_scouted'] is: ")
+        print(self.opponent_info['army_units_scouted'])
         print("Game ended.")
+        print(f"Result was {result}")
         if self.make_log:
             self.logfile.write(f"{self.my_stats}\n")
             if self.surrendernow:
