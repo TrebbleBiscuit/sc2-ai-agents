@@ -4,7 +4,37 @@ from sc2.unit import Unit
 from sc2.units import Units
 
 class OpponentInfo:
-    def __init__(self):
+    """
+    Using This Class
+
+    First make an instance of the class in your bot like this:
+    # self.my_opponent = OpponentInfo(self)
+    
+    You should call add_expansion() and add_unit() whenever scouting an enemy townhall structure or unit. Like this:
+    # async def on_enemy_unit_entered_vision(self, enemyunit):
+    #     if enemyunit.of_type({HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS}):
+    #         self.my_opponent.add_expansion(enemyunit)
+    #     elif not enemyunit.is_structure:  # this class will skip buildings, but it will be loud about it.
+    #         self.my_opponent.add_unit(unit)
+    The add_expansion function will handle checking for duplicates.
+
+    Likewise you should call remove_expansion whenever an enemy townhall structure is destroyed. Like this:
+    # async def on_unit_destroyed(self, tag):
+        # enemylost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)  # gets last unit or structure (for this function you only really need structure)
+        # if enemylost:
+            # if enemylost.of_type({HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS}):
+                # self.my_opponent.remove_expansion(enemylost)
+    
+    To remove an enemy expansion without marking it as desroyed (I don't know why you would want to do this) do:
+    # self.my_opponent.remove_expansion(unit_object, destroyed = False)
+
+
+    """
+    def __init__(self, bot):
+        self.bot = bot
+        self.mineral_gas_ratio = 2  # How many minerals are 'worth' 1 gas in value calculations?
+
+        self.race = None  # TODO: self.bot.enemy_race but deal with random
         self.workers_lost = 0
         self.expansions = {}
         """
@@ -12,8 +42,19 @@ class OpponentInfo:
             tag : {
                 'is_main': <boolean>,
                 'position': <position>,
-                'created': <game seconds float>,
+                'started': <game seconds float>,
                 'finished': <game seconds float>
+            }
+        }
+        """
+        self.expansions_destroyed = {}
+        """
+        self.expansions_destroyed = {
+            tag : {
+                'position': <position>,
+                'started': <game seconds float>,
+                'finished': <game seconds float>,
+                'destroyed': <game seconds float>
             }
         }
         """
@@ -30,89 +71,81 @@ class OpponentInfo:
         """
     
     def add_expansion(self, expo):
-        pass
         """
-        Assumes every existing enemy townhall is already an entry in self.expansions
-        Call this function in on_enemy_unit_entered_vision() to make sure everything's always as recent as possible  (???)
-
-        i dont even know what's going on
+        See notes at top of class for usage.
         """
+        assert isinstance(expo, Unit)
+        if expo.tag in self.expansions:  # this townhall already in expansions
+            return  # TODO: check position to see if terran floated it from somewhere
+        for tag, sd in self.expansions.items():
+            if expo.position.distance_to(sd['position']) < 2:  # if an existing expansion is in the same place as this new one
+                old_expo = self.expansions.pop(tag)  # remove old expo from the list
+                self.expansions[expo.tag] = old_expo  # add this one with all the old one's same info
+                break  # no need to go through the rest of the for loop TODO: could be return maybe?
+        else:  # for/else - expansion is not already in list - now is the first time we scouted it!
+            started_at = self.bot.time - (expo.build_progress * 71)  # expansions take 71 seconds to build
+            finish_at = self.bot.time + ((1 - expo.build_progress) * 71)  # if already done, time will be current game time
+            self.expansions[expo.tag] = {
+                'is_main': (expo.position == self.bot.enemy_start_locations[0].position),
+                'position': expo.position,
+                'started': started_at,
+                'finished': finish_at
+            }
+        if expo.position not in self.bot.expansion_locations_list:
+            print(f"scouted expansion {expo} is at an UNEXPECTED LOCATION")
 
+    def remove_expansion(self, expo, destroyed = True):
         """
-        assert isinstance(to_add, Unit):
-        if expo.tag already in self.expansions:  # this townhall already in expansions
-            return
-        elif (
-            len(self.opponent_info["expansions"]) > 0  # at least 1 expansion recorded on list
-            and expo.position.closest([self.expansions[tag]['position'] for tag in self.expansions]).distance_to(expo.position) < 2  # this expo is in the same place as the one on the list
-        ):  # TODO: ^^^ test this monstrosity
-            closest_expo_tag = expo.position.closest([self.expansions[tag]['position'] for tag in self.expansions]).tag
-            self.expansions[expo.tag]['is_main'] = 
-            self.expansions[expo.tag]['position']
-            self.expansions[expo.tag]['created'] = 
-            self.expansions[expo.tag]['finished'] = 
-            self.expansions.pop(expo.position.closest(self.expansions))  # remove old expo from the list, replace with this one
-        # pass it a unit object and it will populate all the relevant dictionary fields
-        # check if expo at same position is already in list
-        # if so, copy its information into the new tag and delete the old tag
-
-
-
-        for th in enemy_townhalls:
-            if th in self.opponent_info['expansions']:  # this th already in set
-                continue
-            if len(self.opponent_info["expansions"]) > 0 and th.position.closest(self.opponent_info["expansions"]).distance_to(th.position) < 2:  # the townhall in question very close to one already in the list
-                # this is here b/c a command center and an orbital would otherwise show up as different expansions
-                self.opponent_info['expansions'].remove(th.position.closest(self.opponent_info["expansions"]))  # remove old expansion from set
-                self.opponent_info['expansions'].add(th)  # add new expansion
-            else:  # new expansion!
-                self.opponent_info["expansions"].add(th)
-                print("found a new enemy base!")
-                if th.build_progress < 1:
-                    print(f"its build progress is {th.build_progress}")
-                    started_at = self.time - (th.build_progress * 71)
-                    finish_at = self.time + ((1 - th.build_progress) * 71)
-                    print(f"current game time is {self.time}")
-                    print(f"scouted townhall was started at time {started_at}")
-                    print(f"scouted townhall will finish at time {finish_at}")
-                if th.position in self.expansion_locations_list:
-                    print("expansion is at an expected location")
-                else:
-                    print("expansion is at an UNEXPECTED LOCATION")
+        See notes at top of class for usage.
+        Removes an expansion from self.expansions, if destroyed adds details to self.expansions_destroyed
         """
-
-    def check_expansions(self):
-        """
-        Checks enemy structures, if there is no tag for an entry on our expansion list, delete it
-        """
+        assert isinstance(expo, Unit)
+        if expo.tag not in self.expansions:
+            raise Exception  # tried to remove an expansion that wasn't in OpponentInfo.expansions
+        elif expo.tag in self.expansions_destroyed:
+            raise Exception  # tried to remove an expansion that was already marked as destroyed
+        old_expo = self.expansions.pop(expo.tag)  # remove expansion from self.expansions
+        if destroyed:  # also add to self.expansions_destroyed
+            self.expansions_destroyed[expo.tag] = {
+                'position': expo.position,
+                'started': old_expo['started'],
+                'finished': old_expo['started'],
+                'destroyed': self.bot.time
+            }
 
     def add_unit(self, unit):
+        # pass it a unit object and it will populate all the relevant dictionary fields
+        # TODO: merge add_unit and add_expansion such that you only have to call one function in on_enemy_unit_entered_vision()
+        assert isinstance(unit, Unit)
+        if unit.is_structure:
+            print("Tried to add a structure using OopponentInfo.add_unit(). Don't do that.")
+            return
         self.army_units[unit.tag] = {
             'type_id': unit.type_id,
-            'value_minerals': self.calculate_unit_value(enemyunit.type_id).minerals,
-            'value_gas': self.calculate_unit_value(enemyunit.type_id).vespene,
-            'supply': self.calculate_supply_cost(enemyunit.type_id),  # TODO: calculate_supply_cost doesn't behave as expected, see documentation and fix
-            'first_seen': self.time
+            'value_minerals': self.bot.calculate_unit_value(unit.type_id).minerals,
+            'value_gas': self.bot.calculate_unit_value(unit.type_id).vespene,
+            'supply': self.bot.calculate_supply_cost(unit.type_id),  # TODO: calculate_supply_cost doesn't behave as expected, see documentation and fix
+            'first_seen': self.bot.time
         }
-            # value_minerals += self.calculate_unit_value(unit.type_id).minerals
-            # value_gas += self.calculate_unit_value(unit.type_id).vespene
-        # pass it a unit object and it will populate all the relevant dictionary fields
-    
-    #def remove_unit_by_tag(self, tag):  # can just do OpponentInfo.army_units.pop(tag) instead, same with expos
 
     def get_army_supply(self):
-        pass
-        # self.calculate_supply_cost(enemyunit.type_id)  #
-        # calculate_supply_cost doesn't behave as expected, see documentation and fix
+        army_supply = 0
+        for tag, udict in self.army_units.items():
+            army_supply += udict['supply']
+        return army_supply
 
     def get_army_value(self, f='tuple'):
         value_minerals = 0
         value_gas = 0
         for tag, udict in self.army_units.items():
-
             value_minerals += udict['value_minerals']
             value_gas += udict['value_gas']
-        return (value_minerals, value_gas)
+        if f == 'tuple':
+            return (value_minerals, value_gas)
+        elif f == 'int':
+            self.mineral_gas_ratio
+        else:
+            raise Exception  # invalid format for OpponentInfo.get_army_value
 
     def get_unit_composition(self):
         """
@@ -147,7 +180,7 @@ class ArmyGroup:
         self.state = "IDLE"
         self.attack_position = self.bot.enemy_start_locations[0]
         #self.respond_to_nearby_threats = True
-        self.target_fire_units = set()
+        self.target_fire_units = set()  # set of UnitTypeIds
         # Marine - {BANELING, INFESTOR, HIGHTEMPLAR, DARKTEMPLAR}
         # Marauder - {}
     
