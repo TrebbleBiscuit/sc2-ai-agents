@@ -31,6 +31,7 @@ class Model2E(sc2.BotAI):
         self.value_lost_vespene = 0
 
     async def on_step(self, iteration):
+        """ Called every iteration """
         if iteration == 0:
             self.sorted_expo_locations = self.start_location.sort_by_distance(self.expansion_locations_list)
             for w in self.workers:  # split workers
@@ -53,10 +54,13 @@ class Model2E(sc2.BotAI):
         await self.intel()
     
     async def on_unit_created(self, unit):
+        """ Called on unit creation """
         if unit.type_id == "UnitTypeId.QUEEN":
-            print("Queen Created!")
+            pass
+            # print("Queen Created!")
 
     async def on_unit_destroyed(self, tag):
+        """ Called on unit destruction """
         lost = self._units_previous_map.get(tag) or self._structures_previous_map.get(tag)
         enemylost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)
 
@@ -78,7 +82,16 @@ class Model2E(sc2.BotAI):
     
 
     async def opening_build(self):
-
+        """ Handles macro during the opening
+        12 SCV
+        Send out 2 SCVs
+        Depot
+        Send out another SCV
+        Proxy Barracks x3
+        13 SCV
+        Proxy Barracks
+        Depot (2nd)
+        """
         # TODO: deal with idle SCV that finishes 1st depot
 
         if self.opening_step == 0:  # make SCV, send out SCV
@@ -158,10 +171,12 @@ class Model2E(sc2.BotAI):
             print("opening done")
             
     async def train_marines(self):
+        """ Indiscriminately trains marines from idle rax"""
         for rax in self.structures(UnitTypeId.BARRACKS).ready.idle:
             if self.can_afford(UnitTypeId.MARINE): rax.train(UnitTypeId.MARINE)
 
     async def army_movement(self, iteration):
+        """ A move to enemy base at 2:30, stutter step """
         forces: Units = self.units(UnitTypeId.MARINE)
         if self.time > 150:  # 2:30
             if not self.allin:
@@ -180,6 +195,7 @@ class Model2E(sc2.BotAI):
             await self.build(UnitTypeId.SUPPLYDEPOT, near=self.townhalls.first.position.towards(self.game_info.map_center, 6))
     
     async def make_barracks(self):
+        """ Make more barracks if we have a bunch of money """
         if self.minerals > 350 and self.supply_left > 0:
             worker_canidates = self.workers.filter(lambda worker: not worker.is_attacking and not worker.is_constructing_scv)
             if not worker_canidates: return
@@ -222,19 +238,19 @@ class Model2E(sc2.BotAI):
         game_data = np.zeros((self.game_info.map_size[1], self.game_info.map_size[0], 3), np.uint8)
         """
         draw_dict = {
-                     SUPPLYDEPOT: [2, (20, 200, 0)],
-                     SUPPLYDEPOTLOWERED: [2, (20, 200, 0)],
-                     SCV: [1, (55, 200, 0)],
-                     REFINERY: [2, (55, 200, 0)],
-                     BARRACKS: [3, (200, 140, 0)],
-                     ENGINEERINGBAY: [3, (150, 150, 0)],
-                     STARPORT: [3, (200, 140, 0)],
-                     FACTORY: [3, (215, 155, 0)],
-                     MARINE: [1, (255, 100, 0)],
-                     MARAUDER: [1, (200, 100, 0)],
-                     MEDIVAC: [1, (255, 255, 200)],
-                     RAVEN: [1, (150, 150, 50)],
-                    }
+            SUPPLYDEPOT: [2, (20, 200, 0)],
+            SUPPLYDEPOTLOWERED: [2, (20, 200, 0)],
+            SCV: [1, (55, 200, 0)],
+            REFINERY: [2, (55, 200, 0)],
+            BARRACKS: [3, (200, 140, 0)],
+            ENGINEERINGBAY: [3, (150, 150, 0)],
+            STARPORT: [3, (200, 140, 0)],
+            FACTORY: [3, (215, 155, 0)],
+            MARINE: [1, (255, 100, 0)],
+            MARAUDER: [1, (200, 100, 0)],
+            MEDIVAC: [1, (255, 255, 200)],
+            RAVEN: [1, (150, 150, 50)],
+        }
 
         for unit_type in draw_dict:
             for unit in self.units(unit_type):

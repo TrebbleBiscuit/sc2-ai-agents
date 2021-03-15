@@ -53,27 +53,35 @@ class SN_10L(sc2.BotAI):
             print("undefined game stage, oof")
 
     async def on_unit_created(self, unit):
-        pass
+        pass  # note that larva spawning calls this function
 
     async def on_unit_destroyed(self, tag):
+        """
+        Note that losing eggs calls this function.
+        """
         lost = self._units_previous_map.get(tag) or self._structures_previous_map.get(tag)
         if lost:
+            if lost.type_id in {EGG, LARVA, BROODLING}:
+                return  # we want to ignore units like this
             self.value_lost_minerals += self.calculate_unit_value(lost.type_id).minerals
             self.value_lost_vespene += self.calculate_unit_value(lost.type_id).vespene
-            if str(lost.type_id) == "UnitTypeId.DRONE":
-                pass  # TODO: keep track of number of workers lost
-            if lost.tag in self.queen_assignments:  # this could be one line, self.queen_assignments.pop(lost.tag, None)
+            if lost.type_id in {HATCHERY, LAIR, HIVE}:
+                for q, h in self.queen_assignments.items():
+                    if tag == h:
+                        self.queen_assignments.pop(q)  # if hatch dies, remove from queen_assignments
+                        return
+            elif lost.type_id in {DRONE}:
+                pass  # TODO: keep track of number of workers lost - does this get called when drones make buildings?
+            elif lost.tag in self.queen_assignments:  # this could be one line, self.queen_assignments.pop(lost.tag, None)
                 self.queen_assignments.pop(lost.tag)
-                # TODO: if lost hatch, remove 
 
         enemylost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)
-        if enemylost and str(enemylost.type_id) != "UnitTypeId.MULE":
+        if enemylost and enemylost.type_id not in {EGG, LARVA, BROODLING, MULE}:
             self.value_killed_minerals += self.calculate_unit_value(enemylost.type_id).minerals
             self.value_killed_vespene += self.calculate_unit_value(enemylost.type_id).vespene
             # UNDER CONSTRUCTION
-            if enemylost.type_id in [HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS]:
+            if enemylost.type_id in {HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS}:
                 print("Enemy lost townhall!")
-
 
     async def pair_queens_to_hatches(self):
         if len(self.queen_assignments) < self.townhalls.ready.amount:  # at least 1 hatch without a paired queen
@@ -93,7 +101,6 @@ class SN_10L(sc2.BotAI):
                     print(f"Queen assignments is: {self.queen_assignments}")
                     break  # break out of for loop
         """
-
 
     async def opening_build(self):
         # 17 hatch 18 gas 17 pool
@@ -265,11 +272,9 @@ class SN_10L(sc2.BotAI):
         ):
             if not self.enemy_units.closer_than(40, self.start_location) or self.townhalls.amount > 1:
                 await self.expand_now()
-    
 
     def on_end(self, result):
         print("Game ended.")
-        
 
     def get_rally_point(self):
         return self.sorted_expo_locations[1].towards(self.game_info.map_center, 16)
@@ -312,4 +317,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
