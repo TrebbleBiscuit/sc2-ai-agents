@@ -183,7 +183,6 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             await self.repair_damaged_buildings()           # will send 1 scv to damaged buildings to help repair every time it is run
         if iteration % 30 == 0:  # Do much less frequently
             await self.finish_constructing_buildings()      # will send 1 scv to incomplete, halted building every time it is run
-            
 
         # Macro
         await self.manage_spending()                # spend money
@@ -274,9 +273,9 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
                 else: 
                     print("enemy lost expansion not in expansion list - probably a thing with a floating or morphed building?")
 
-        
 
-### Above functions are called by the game, below functions are called by the above functions ###
+
+    ### Above functions are called by the game, below functions are called by the above functions ###
 
     async def army_movement(self, iteration):
         self.forces: Units = self.units.of_type({MARINE, MARAUDER, SIEGETANK, HELLION})
@@ -586,7 +585,7 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
             threatening_units = self.enemy_units.exclude_type({LARVA, OVERLORD, OBSERVER, OVERSEER, CHANGELING, CHANGELINGMARINE, CHANGELINGMARINESHIELD})  # units we're not scared of
             if threatening_units:
                 closest_enemy = threatening_units.closest_to(r)  # need to define this here so we can check it on the next if and then use it more later
-                if r.distance_to(closest_enemy) < 8.5:  # (not elif) enemy nearby
+                if r.distance_to(closest_enemy) < 9:  # (not elif) enemy nearby
                     dist_to_run = random.uniform(2.5, 4.5)  # randomize a bit so the reaper gets stuck less often
                     closest_structure = self.enemy_structures.closest_to(r)
                     if r.distance_to(closest_structure) > 15 and random.random() < 0.2:
@@ -1204,8 +1203,8 @@ class DeckardBot(sc2.BotAI):  # Do things here before the game starts
 
     def get_mule_target(self):
         for cc in self.townhalls.ready:
-            if cc.tag == max(self.townhalls.tags):
-                return self.mineral_field.closest_to(cc)
+            # if cc.tag == max(self.townhalls.tags):  # ?
+            return self.mineral_field.closest_to(cc)
 
     def get_pos_to_scout(self):
         enemy_expo_pos_list = [p.position for p in self.opponent_info["expansions"]]

@@ -1,197 +1,8 @@
+from sc2.data import Race
 from sc2.ids.unit_typeid import *
 from sc2.ids.ability_id import *
 from sc2.unit import Unit
 from sc2.units import Units
-
-class OpponentInfo:
-    """
-    Using This Class
-
-    First make an instance of the class in your bot like this:
-    # self.my_opponent = OpponentInfo(self)
-    
-    You should call add_expansion() and add_army_unit() whenever scouting an enemy townhall structure or unit. Like this:
-    # async def on_enemy_unit_entered_vision(self, enemyunit):
-    #     if enemyunit.of_type({HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS}):
-    #         self.my_opponent.add_expansion(enemyunit)
-    #     elif not enemyunit.is_structure:  # this class will skip buildings, but it will be loud about it.
-    #         self.my_opponent.add_army_unit(unit)
-    The add_expansion function will handle checking for duplicates.
-
-    Likewise you should call remove_expansion whenever an enemy townhall structure is destroyed. Like this:
-    # async def on_unit_destroyed(self, tag):
-    #     enemylost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)  # gets last unit or structure (for this function you only really need structure)
-    #     if enemylost:
-    #         if enemylost.of_type({HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS}):
-    #         self.my_opponent.remove_expansion(enemylost)
-    
-    To remove an enemy expansion without marking it as desroyed (I don't know why you would want to do this) do:
-    # self.my_opponent.remove_expansion(unit_object, destroyed = False)
-
-
-    """
-    def __init__(self, bot):
-        self.bot = bot
-        self.mineral_gas_ratio = 2  # How many minerals are 'worth' 1 gas in value calculations?
-        self.race = self.bot.enemy_race  # TODO: deal with random
-        self.workers_lost = 0
-        self.expansions = {}
-        """
-        self.expansions = {
-            tag : {
-                'is_main': <boolean>,
-                'position': <position>,
-                'started': <game seconds float>,
-                'finished': <game seconds float>
-            }
-        }
-        """
-        self.expansions_destroyed = {}
-        """
-        self.expansions_destroyed = {
-            tag : {
-                'position': <position>,
-                'started': <game seconds float>,
-                'finished': <game seconds float>,
-                'destroyed': <game seconds float>
-            }
-        }
-        """
-
-        self.army_units = {}
-        """
-        self.army_units[enemyunit.tag] = {
-            'type_id': enemyunit.type_id,
-            'value_minerals': <mineral value>,
-            'value_gas': <gas value>,
-            'supply': <supply taken>,  # TODO: calculate_supply_cost doesn't behave as expected, see documentation and fix
-            'first_seen': <gane seconds float>
-        }
-        """
-
-    def handle_enemy_unit_entered_vision(self, unit):
-        if unit.type_id in {EGG, LARVA, BROODLING, MULE}:
-            return  # we ignore these units
-        elif unit.type_id in {SCV, PROBE, DRONE}:
-            pass  # TODO: keep track of enemy workers
-        elif unit.type_id in {HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS}:
-            self.add_expansion(unit)  # keep track of enemy expansions
-        elif unit.is_structure:
-            pass  # ignore other enemy structures for now
-        else:  # army unit
-            self.add_army_unit(unit)
-        pass  # call add_expansion or add_army_unit if needed
-
-    def handle_on_unit_destroyed(self, tag):
-        # allied units should be silently ignored but you shouldn't pass them to this function anyway
-        enemy_lost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)
-        if enemy_lost.is_structure:
-            if enemy_lost.type_id in {HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS}:
-                self.remove_expansion(tag)
-        else:
-            self.remove_unit(tag)
-
-    # async def on_unit_destroyed(self, tag):
-    #     enemylost = self._enemy_units_previous_map.get(tag) or self._enemy_structures_previous_map.get(tag)  # gets last unit or structure (for this function you only really need structure)
-    #     if enemylost:
-    #         if enemylost.of_type({HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS}):
-    #         self.my_opponent.remove_expansion(enemylost)
-
-    def add_expansion(self, expo):
-        """
-        See notes at top of class for usage.
-        """
-        assert isinstance(expo, Unit)
-        if expo.tag in self.expansions:  # this townhall already in expansions
-            return  # TODO: check position to see if terran floated it from somewhere
-        for tag, sd in self.expansions.items():
-            if expo.position.distance_to(sd['position']) < 2:  # if an existing expansion is in the same place as this new one
-                old_expo = self.expansions.pop(tag)  # remove old expo from the list
-                self.expansions[expo.tag] = old_expo  # add this one with all the old one's same info
-                break  # no need to go through the rest of the for loop TODO: could be return maybe?
-        else:  # for/else - expansion is not already in list - now is the first time we scouted it!
-            started_at = self.bot.time - (expo.build_progress * 71)  # expansions take 71 seconds to build
-            finish_at = self.bot.time + ((1 - expo.build_progress) * 71)  # if already done, time will be current game time
-            self.expansions[expo.tag] = {
-                'is_main': (expo.position == self.bot.enemy_start_locations[0].position),
-                'position': expo.position,
-                'started': started_at,
-                'finished': finish_at
-            }
-        if expo.position not in self.bot.expansion_locations_list:
-            print(f"scouted expansion {expo} is at an UNEXPECTED LOCATION")
-
-    def remove_expansion(self, expo, destroyed=True):
-        """
-        See notes at top of class for usage.
-        Removes an expansion from self.expansions, if destroyed adds details to self.expansions_destroyed
-        """
-        if isinstance(expo, Unit):  # convert to tag, plug back in
-            self.remove_expansion(expo.tag, destroyed=destroyed)
-        assert isinstance(expo, int)
-        if expo not in self.expansions:
-            raise Exception  # tried to remove an expansion that wasn't in OpponentInfo.expansions
-        elif expo in self.expansions_destroyed:
-            raise Exception  # tried to remove an expansion that was already marked as destroyed
-        old_expo = self.expansions.pop(expo)  # remove expansion from self.expansions
-        if destroyed:  # also add to self.expansions_destroyed
-            self.expansions_destroyed[expo] = {
-                'position': old_expo.position,
-                'started': old_expo['started'],
-                'finished': old_expo['started'],
-                'destroyed': self.bot.time
-            }
-
-    def add_army_unit(self, unit):
-        # pass it a unit object and it will populate all the relevant dictionary fields
-        # only pass this function units you really want added. probably shouldn't add enemy workers and stuff.
-        assert isinstance(unit, Unit)
-        if unit.is_structure:
-            print("Tried to add a structure using OpponentInfo.add_army_unit(). Don't do that.")
-            print("Skipping...")
-            return
-        self.army_units[unit.tag] = {
-            'type_id': unit.type_id,
-            'value_minerals': self.bot.calculate_unit_value(unit.type_id).minerals,
-            'value_gas': self.bot.calculate_unit_value(unit.type_id).vespene,
-            'supply': self.bot._game_data.units[unit.type_id.value]._proto.food_required,
-            'first_seen': self.bot.time
-        }
-
-    def remove_unit(self, unit):
-        # TODO: calculate total value lost
-        pass
-
-    def get_army_supply(self):
-        army_supply = 0
-        for tag in self.army_units:
-            army_supply += self.army_units[tag]['supply']
-        return army_supply
-
-    def get_army_value(self, f='tuple'):
-        value_minerals = 0
-        value_gas = 0
-        for tag, udict in self.army_units.items():
-            value_minerals += udict['value_minerals']
-            value_gas += udict['value_gas']
-        if f == 'tuple':
-            return (value_minerals, value_gas)
-        elif f == 'int':
-            return value_minerals + (self.mineral_gas_ratio * value_gas)
-        else:
-            raise Exception  # invalid format for OpponentInfo.get_army_value
-
-    def get_unit_composition(self):
-        types_set = set()
-        for unit in self.army_units:
-            types_set.add(unit.type_id)
-        return types_set
-
-    def get_estimated_worker_count(self):
-        pass
-        # workers take 12 seconds to build
-        # orbital takes 25 seconds to morph
-
 
 class ArmyGroup:
     """
@@ -299,6 +110,119 @@ class ArmyGroup:
 
     def get_threats(self):
         for townhall in self.bot.townhalls:  # threats are visible units closer than self.defense_range to a nearby townhall
-            self.threats = self.bot.known_enemy_units.visible.closer_than(self.defense_range, townhall.position)
+            self.threats = self.bot.enemy_units.visible.closer_than(self.defense_range, townhall.position)
             # overwrites it every time ughhhh
         return self.threats.exclude_type({LARVA})
+
+
+### From burny-bots-python-sc2 CreepyBot
+###
+
+def get_unit_info(bot, unit, field="food_required"):
+    # get various unit data, see list below
+    # usage: get_unit_info(ROACH, "mineral_cost")
+    assert isinstance(unit, (Unit, UnitTypeId))
+    if isinstance(unit, Unit):
+        # unit = unit.type_id
+        unit = unit._type_data._proto
+    else:
+        unit = bot._game_data.units[unit.value]._proto
+    # unit = bot._game_data.units[unit.value]
+    # print(vars(unit)) # uncomment to get the list below
+    if hasattr(unit, field):
+        return getattr(unit, field)
+    else:
+        return None
+    """
+    name: "Drone"
+    available: true
+    cargo_size: 1
+    attributes: Light
+    attributes: Biological
+    movement_speed: 2.8125
+    armor: 0.0
+    weapons {
+        type: Ground
+        damage: 5.0
+        attacks: 1
+        range: 0.10009765625
+        speed: 1.5
+    }
+    mineral_cost: 50
+    vespene_cost: 0
+    food_required: 1.0
+    ability_id: 1342
+    race: Zerg
+    build_time: 272.0
+    sight_range: 8.0
+    """
+
+
+
+    # update scouting info depending on visible units that we can see
+    # if we see buildings that are not
+    # depot, rax, bunker, spine crawler, spore, nydus, pylon, cannon, gateway
+    # then assume that is the enemy spawn location
+
+def process_scouting(bot):
+    if not hasattr(bot, 'opponent_data'):
+        bot.opponent_data = {
+            "spawn_location": None,         # for 4player maps
+            "expansions": [],               # stores a list of Point2 objects of expansions
+            "expansions_tags": set(),       # stores the expansions above as tags so we dont count them double
+            "race": None,
+            "army_tags_scouted": [],        # list of dicts with entries: {"tag": 123, "scout_time": 15.6, "supply": 2}
+            "army_supply_scouted": 0,
+            "army_supply_nearby": 0,
+            "army_supply_visible": 0
+        }
+    # set enemy spawn location
+    ignore_these_buildings = [SUPPLYDEPOT, SUPPLYDEPOTLOWERED, BARRACKS, BUNKER, SPINECRAWLER, SPORECRAWLER, NYDUSNETWORK, NYDUSCANAL, PYLON, PHOTONCANNON, GATEWAY]
+    if bot.opponent_data["spawn_location"] is None and len(bot.enemy_start_locations) > 0:
+        if bot.enemy_structures.exists:
+            filtered_units = bot.enemy_structures.filter(lambda x:x.type_id not in ignore_these_buildings)
+            if filtered_units.exists:
+                bot.opponent_data["spawn_location"] = filtered_units.random.position.closest(bot.enemy_start_locations)
+
+    # figure out the race of the opponent
+    if bot.opponent_data["race"] is None and bot.enemy_units.exists:
+        unit_race = get_unit_info(bot, bot.enemy_units.random, "race")
+        racesDict = {
+            Race.Terran.value: "Terran",
+            Race.Zerg.value: "Zerg",
+            Race.Protoss.value: "Protoss",
+        }
+        bot.opponent_data["race"] = unit_race
+
+    # figure out how much army supply enemy has:
+    visible_enemy_units = bot.enemy_units.not_structure.filter(lambda x:x.type_id not in [DRONE, SCV, PROBE, LARVA, EGG])
+    for unit in visible_enemy_units:
+        isUnitInInfo = next((x for x in bot.opponent_data["army_tags_scouted"] if x["tag"] == unit.tag), None)
+        if isUnitInInfo is not None:
+            bot.opponent_data["army_tags_scouted"].remove(isUnitInInfo)
+        # if unit.tag not in bot.opponent_data["army_tags_scouted"]:
+        if bot.townhalls.ready.exists:
+            bot.opponent_data["army_tags_scouted"].append({
+                "tag": unit.tag,
+                "scout_time": bot.time,
+                "supply": get_unit_info(bot, unit) or 0,
+                "distance_to_base": bot.townhalls.ready.closest_to(unit).distance_to(unit),
+            })
+
+    # get opponent army supply (scouted / visible)
+    scout_timeout_duration =  90 # TODO: set the time on how long until the scouted army supply times out
+    bot.opponent_data["army_supply_scouted"] = sum(x["supply"] for x in bot.opponent_data["army_tags_scouted"] if x["scout_time"] > bot.time - scout_timeout_duration)
+    bot.opponent_data["army_supply_nearby"] = sum(x["supply"] for x in bot.opponent_data["army_tags_scouted"] if x["scout_time"] > bot.time - scout_timeout_duration and x["distance_to_base"] < 60)
+    bot.opponent_data["army_supply_visible"] = sum(get_unit_info(bot, x) or 0 for x in visible_enemy_units)
+
+    # get opponent expansions
+    if bot.iteration % 20 == 0:
+        enemy_townhalls = bot.enemy_structures.filter(lambda x:x.type_id in [HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS])
+        for th in enemy_townhalls:
+            if len(bot.opponent_data["expansions"]) > 0 and th.position.closest(bot.opponent_data["expansions"]).distance_to(th.position.to2) < 20:
+                continue
+            if th.tag not in bot.opponent_data["expansions_tags"]:
+                bot.opponent_data["expansions_tags"].add(th.tag)
+                bot.opponent_data["expansions"].append(th.position.to2)
+                print("found a new enemy base!")
+                print(bot.opponent_data["expansions"])

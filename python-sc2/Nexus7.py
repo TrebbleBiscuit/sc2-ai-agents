@@ -11,6 +11,10 @@ from sc2.position import Point2, Point3
 from s2clientprotocol import raw_pb2 as raw_pb
 from s2clientprotocol import sc2api_pb2 as sc_pb
 
+from loguru import logger
+
+import utils
+
 ###############################
 ### Nexus-7 by Erik Nielsen ###
 ###    A Starcraft II AI    ###
@@ -18,16 +22,18 @@ from s2clientprotocol import sc2api_pb2 as sc_pb
 
 class Nexus7(sc2.BotAI):
     async def on_start(self):
-        print("Nexus-7 Online")
+        logger.info('Nexus-7 Online')
 
     async def on_step(self, iteration):
+        self.iteration = 0  # so that we can use this within functions
         if iteration == 0:
             self.sorted_expo_locations = self.start_location.sort_by_distance(self.expansion_locations_list)
             for w in self.workers:  # split workers
                 w.gather(self.mineral_field.closest_to(w))
         
         if iteration == 7: await self.chat_send("Nexus-7. GLHF.")
-        
+
+        utils.process_scouting(self)  # populate self.opponent_data
         self.showdebuginfo()
 
         # Actions
@@ -35,13 +41,14 @@ class Nexus7(sc2.BotAI):
         await self.army_movement(iteration)
         await self.ability_bilnk()
         await self.ability_chronoboost()
-        await self.morph_arcons()
+        await self.morph_archons()
 
         # Macro
-        await self.train_workers()
-        await self.construct_additional_pylons()
-        await self.build_assimilators()
-        await self.build_production()
+        if self.townhalls:
+            await self.train_workers()
+            await self.construct_additional_pylons()
+            await self.build_assimilators()
+            await self.build_production()
         await self.expand()
 
         # Upgrades
@@ -54,13 +61,22 @@ class Nexus7(sc2.BotAI):
         await self.warp_in_robo_units()
     
     async def army_movement(self, iteration):
-        forces: Units = self.units.of_type({STALKER, ZEALOT, IMMORTAL, ARCHON, HIGHTEMPLAR})
+        forces = self.units.of_type({STALKER, ZEALOT, IMMORTAL, ARCHON, HIGHTEMPLAR})
+        army_supply = self.supply_used - self.supply_workers - self.already_pending(UnitTypeId.SCV)
         #if self.already_pending_upgrade(UpgradeId.BLINKTECH) == 1:
         if self.time > 510 and self.time < 600 or self.time > 780:  # 510 sec = 8:30, 780 sec = 13:00
-            for unit in forces.idle: unit.attack(self.enemy_start_locations[0].position)
+            if army_supply < self.opponent_data['army_supply_scouted'] * .8:  # if our army is much smaller
+                pass
+            else:
+                for unit in forces.idle: unit.attack(self.enemy_start_locations[0].position)
         elif iteration % 6 == 0:
-            if self.enemy_units:
-                for unit in forces.idle: unit.attack(self.enemy_units.random.position)
+            close_units = self.enemy_units.closer_than(60, self.start_location)
+            if close_units:
+                for unit in forces.idle: unit.attack(close_units.random.position)
+            elif self.time > 60*3 and army_supply > self.opponent_data['army_supply_scouted'] * 2:  # if our army is much bigger
+                for unit in forces.idle:
+                    # unit.attack(self.enemy_start_locations[0].position)
+                    unit.attack(self.mineral_field.random.position)
             else:
                 for unit in forces: unit.attack(self.get_rally_point())
 
@@ -78,31 +94,43 @@ class Nexus7(sc2.BotAI):
                     stalker(EFFECT_BLINK_STALKER, stalker.position.towards(enemy, -6))
 
     async def ability_chronoboost(self):
-        cybers = self.structures(UnitTypeId.CYBERNETICSCORE).ready
-        twilights = self.structures(UnitTypeId.TWILIGHTCOUNCIL).ready
-        forges = self.structures(UnitTypeId.FORGE).ready
-        for nexus in self.townhalls:
-            if nexus.energy >= 50:
-                if twilights and not twilights.first.is_idle and not twilights.first.has_buff(BuffId.CHRONOBOOSTENERGYCOST):
-                    nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, twilights.first)
-                elif cybers and not cybers.first.is_idle and not cybers.first.has_buff(BuffId.CHRONOBOOSTENERGYCOST):
-                    nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, cybers.first)
-                elif forges and not forges.first.is_idle and not forges.first.has_buff(BuffId.CHRONOBOOSTENERGYCOST):
-                    nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, forges.first)
+        if self.iteration % 4 == 0:
+            cybers = self.structures(UnitTypeId.CYBERNETICSCORE).ready
+            twilights = self.structures(UnitTypeId.TWILIGHTCOUNCIL).ready
+            forges = self.structures(UnitTypeId.FORGE).ready
+            for nexus in self.townhalls.ready:
+                if nexus.energy >= 50:
+                    if twilights and not twilights.first.is_idle and not twilights.first.has_buff(BuffId.CHRONOBOOSTENERGYCOST):
+                        logger.info(f'Chronoing Twilight Council')
+                        nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, twilights.first)
+                        return
+                    elif cybers and not cybers.first.is_idle and not cybers.first.has_buff(BuffId.CHRONOBOOSTENERGYCOST):
+                        logger.info(f'Chronoing Cybernetics Core')
+                        nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, cybers.first)
+                        return
+                    elif forges and not forges.first.is_idle and not forges.first.has_buff(BuffId.CHRONOBOOSTENERGYCOST):
+                        logger.info(f'Chronoing Forge')
+                        nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, forges.first)
+                        return
 
-                #elif not nexus.is_idle and not nexus.has_buff(BuffId.CHRONOBOOSTENERGYCOST):
-                #    nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, nexus)  # will only chrono itself, not another nexus
+                    #elif not nexus.is_idle and not nexus.has_buff(BuffId.CHRONOBOOSTENERGYCOST):
+                    #    nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, nexus)  # will only chrono itself, not another nexus
 
     async def train_workers(self):
         for nexus in self.townhalls:
             if (
                 self.can_afford(UnitTypeId.PROBE)
-                and self.supply_workers < self.get_ideal_worker_count()
+                and self.supply_workers + self.already_pending(UnitTypeId.SCV) < self.get_ideal_worker_count()
                 and nexus.is_idle
             ):
                 nexus.train(UnitTypeId.PROBE)
     
     async def warp_in_gateway_units(self):
+        if self.time < 150:
+            for gateway in self.structures(UnitTypeId.GATEWAY).ready.idle:
+                if not self.units.of_type(ZEALOT) and self.can_afford(ZEALOT):
+                    gateway.train(ZEALOT)
+
         for warpgate in self.structures(UnitTypeId.WARPGATE).ready:
             abilities = await self.get_available_abilities(warpgate)
             if self.units.of_type({STALKER}):  # avoid division by zero
@@ -115,7 +143,7 @@ class Nexus7(sc2.BotAI):
                     placement = await self.find_placement(AbilityId.WARPGATETRAIN_ZEALOT, target, placement_step=1)
                     if placement is None:
                         # return ActionResult.CantFindPlacementLocation
-                        print("can't place zealot")
+                        logger.info("Can't find zealot placement")
                         return
                     warpgate.warp_in(UnitTypeId.ZEALOT, placement)
             if (
@@ -130,7 +158,7 @@ class Nexus7(sc2.BotAI):
                 placement = await self.find_placement(AbilityId.WARPGATETRAIN_STALKER, target, placement_step=1)
                 if placement is None:
                     # return ActionResult.CantFindPlacementLocation
-                    print("can't place stalker")
+                    logger.info("Can't find stalker placement")
                     return
                 warpgate.warp_in(UnitTypeId.STALKER, placement)
     
@@ -212,6 +240,7 @@ class Nexus7(sc2.BotAI):
             and not self.already_pending(UnitTypeId.NEXUS)
         ):
             if not self.enemy_units.closer_than(40, self.start_location) or self.townhalls.amount > 1:
+                logger.info('Expanding')
                 await self.expand_now()
 
     async def upgrade_warp_gate(self):
@@ -228,6 +257,7 @@ class Nexus7(sc2.BotAI):
             and self.can_afford(AbilityId.RESEARCH_BLINK)
             and self.already_pending_upgrade(UpgradeId.BLINKTECH) == 0
         ):
+            logger.info('Researching Blink')
             self.structures(UnitTypeId.TWILIGHTCOUNCIL).ready.first.research(UpgradeId.BLINKTECH)
         if (
             self.structures(UnitTypeId.TWILIGHTCOUNCIL).ready
@@ -235,6 +265,7 @@ class Nexus7(sc2.BotAI):
             and self.already_pending_upgrade(UpgradeId.BLINKTECH) == 1
             and self.already_pending_upgrade(UpgradeId.CHARGE) == 0
         ):
+            logger.info('Researching Charge')
             self.structures(UnitTypeId.TWILIGHTCOUNCIL).ready.first.research(UpgradeId.CHARGE)
 
     async def forge_upgrades(self):
@@ -244,34 +275,40 @@ class Nexus7(sc2.BotAI):
                 AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL1 in abilities
                 and self.can_afford(AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL1)
             ):
+                logger.info('Researching +1 Ground Weapons')
                 forge.research(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL1)
             elif (
                 AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL2 in abilities
                 and self.can_afford(AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL2)
             ):
+                logger.info('Researching +2 Ground Weapons')
                 forge.research(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL2)
             elif (
                 AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL3 in abilities
                 and self.can_afford(AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL3)
             ):
+                logger.info('Researching +3 Ground Weapons')
                 forge.research(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL3)
             elif (
                 AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL1 in abilities
                 and self.can_afford(AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL1)
             ):
+                logger.info('Researching +1 Ground Armor')
                 forge.research(UpgradeId.PROTOSSGROUNDARMORSLEVEL1)
             elif (
                 AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL2 in abilities
                 and self.can_afford(AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL2)
             ):
+                logger.info('Researching +2 Ground Armor')
                 forge.research(UpgradeId.PROTOSSGROUNDARMORSLEVEL2)
             elif (
                 AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL3 in abilities
                 and self.can_afford(AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL3)
             ):
+                logger.info('Researching +3 Ground Armor')
                 forge.research(UpgradeId.PROTOSSGROUNDARMORSLEVEL3)
     
-    async def morph_arcons(self):
+    async def morph_archons(self):
         if self.units(UnitTypeId.HIGHTEMPLAR).ready.amount >= 2:
             ht1 = self.units(UnitTypeId.HIGHTEMPLAR).ready.random
             ht2 = next((ht for ht in self.units(UnitTypeId.HIGHTEMPLAR).ready if ht.tag != ht1.tag), None)
@@ -288,7 +325,7 @@ class Nexus7(sc2.BotAI):
 
 
     def on_end(self, result):
-        print("Game ended.")
+        logger.info(f'Game ended - result: {result}')
         # Do things here after the game ends
     
     def get_rally_point(self):
@@ -326,7 +363,9 @@ class Nexus7(sc2.BotAI):
             elif th == 3 and self.townhalls.ready.amount == 3: return 2
             elif th >= 4: return 3
             else: return 0
-        else: raise(Exception)
+        else:
+            logger.error('unrecognized argument in get_ideal_building_count')
+            raise Exception
     
     def get_ideal_worker_count(self):
         idealworkers = (16 * self.townhalls.amount) + (3 * self.get_ideal_building_count("ASSIMILATOR"))
@@ -339,8 +378,14 @@ class Nexus7(sc2.BotAI):
         debugtext1 = "Gateway Count: " + str(self.already_pending(UnitTypeId.GATEWAY) + self.structures.of_type({UnitTypeId.GATEWAY, UnitTypeId.WARPGATE}).ready.amount) + "/" + str(self.get_ideal_building_count("GATEWAY"))
         self._client.debug_text_screen(text=debugtext1, pos=Point2((0, 0.05)), color=None, size=8)
 
-        debugtext11 = "Robo Count:    " + str(self.already_pending(UnitTypeId.ROBOTICSFACILITY) + self.structures.of_type({UnitTypeId.ROBOTICSFACILITY}).ready.amount) + "/" + str(self.get_ideal_building_count("ROBOTICS FACILITY"))
-        self._client.debug_text_screen(text=debugtext11, pos=Point2((0, 0.06)), color=None, size=8)
+        debugtext2 = "Robo Count:    " + str(self.already_pending(UnitTypeId.ROBOTICSFACILITY) + self.structures.of_type({UnitTypeId.ROBOTICSFACILITY}).ready.amount) + "/" + str(self.get_ideal_building_count("ROBOTICS FACILITY"))
+        self._client.debug_text_screen(text=debugtext2, pos=Point2((0, 0.06)), color=None, size=8)
+
+        debugtext3 = "Army Supply:   " + str(self.supply_used - self.supply_workers - self.already_pending(UnitTypeId.SCV))
+        self._client.debug_text_screen(text=debugtext3, pos=Point2((0, 0.07)), color=None, size=8)
+
+        debugtext4 = "Hostile Army:  " + str(self.opponent_data['army_supply_scouted'])
+        self._client.debug_text_screen(text=debugtext4, pos=Point2((0, 0.08)), color=None, size=8)
 
 
 def main():

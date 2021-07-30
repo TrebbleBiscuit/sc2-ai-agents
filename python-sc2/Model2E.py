@@ -73,11 +73,6 @@ class Model2E(sc2.BotAI):
         if enemylost and str(enemylost.type_id) != "UnitTypeId.MULE":
             self.value_killed_minerals += self.calculate_unit_value(enemylost.type_id).minerals
             self.value_killed_vespene += self.calculate_unit_value(enemylost.type_id).vespene
-            # UNDER CONSTRUCTION
-            if enemylost.type_id in [HATCHERY, LAIR, HIVE, COMMANDCENTER, PLANETARYFORTRESS, ORBITALCOMMAND, NEXUS]:
-                if enemylost in self.opponent_info["expansions"]: 
-                    self.opponent_info["expansions"].remove(enemylost)
-                else: print("WARNING: Enemy lost expo wasn't in expansions list!")
 
     
 
@@ -89,7 +84,7 @@ class Model2E(sc2.BotAI):
         Send out another SCV
         Proxy Barracks x3
         13 SCV
-        Proxy Barracks
+        Proxy Barracks (4th)
         Depot (2nd)
         """
         # TODO: deal with idle SCV that finishes 1st depot
