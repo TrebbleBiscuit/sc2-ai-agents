@@ -13,9 +13,11 @@ from s2clientprotocol import raw_pb2 as raw_pb
 from s2clientprotocol import sc2api_pb2 as sc_pb
 
 from loguru import logger
+import numpy as np
+import cv2
+import random
 
 import utils
-import random
 
 ###############################
 ### Nexus-7 by Erik Nielsen ###
@@ -34,6 +36,7 @@ class Nexus7(sc2.BotAI):
         self.total_worker_supply = self.supply_workers + self.already_pending(UnitTypeId.SCV)
         self.iteration = iteration  # so that we can use this within functions
         if iteration == 0:
+            self._client.game_step = 6  # only step every n frames
             self.sorted_expo_locations = self.start_location.sort_by_distance(self.expansion_locations_list)
             for w in self.workers:  # split workers
                 w.gather(self.mineral_field.closest_to(w))
@@ -42,7 +45,7 @@ class Nexus7(sc2.BotAI):
 
         utils.process_scouting(self)  # populate self.opponent_data
         self.showdebuginfo()
-        # await self.intel()
+        await self.intel()
 
         # Actions
         await self.distribute_workers()
@@ -579,59 +582,58 @@ class Nexus7(sc2.BotAI):
                         actions=[sc_pb.Action(action_raw=action)]
                     ))
     
-    # async def intel(self):
-    #     # for game_info: https://github.com/Dentosal/python-sc2/blob/master/sc2/game_info.py#L162
-    #     # flip around. It's y, x when you're dealing with an array.
+    async def intel(self):
+        # for game_info: https://github.com/Dentosal/python-sc2/blob/master/sc2/game_info.py#L162
+        # flip around. It's y, x when you're dealing with an array.
 
-    #     game_data = np.zeros((self.game_info.map_size[1], self.game_info.map_size[0], 3), np.uint8)
+        game_data = np.zeros((self.game_info.map_size[1], self.game_info.map_size[0], 3), np.uint8)
 
-    #     draw_dict = {
-    #                  SUPPLYDEPOT: [2, (20, 200, 0)],
-    #                  SUPPLYDEPOTLOWERED: [2, (20, 200, 0)],
-    #                  SCV: [1, (55, 200, 0)],
-    #                  REFINERY: [2, (55, 200, 0)],
-    #                  BARRACKS: [3, (200, 140, 0)],
-    #                  ENGINEERINGBAY: [3, (150, 150, 0)],
-    #                  STARPORT: [3, (200, 140, 0)],
-    #                  FACTORY: [3, (215, 155, 0)],
-    #                  MARINE: [1, (255, 100, 0)],
-    #                  MARAUDER: [1, (200, 100, 0)],
-    #                  MEDIVAC: [1, (255, 255, 200)],
-    #                  RAVEN: [1, (150, 150, 50)],
-    #                 }
+        draw_dict = {
+            PYLON: [2, (20, 200, 0)],
+            PROBE: [1, (55, 200, 0)],
+            ASSIMILATOR: [2, (55, 200, 0)],
+            GATEWAY: [3, (200, 140, 0)],
+            WARPGATE: [3, (200, 140, 0)],
+            FORGE: [3, (150, 150, 0)],
+            ROBOTICSFACILITY: [3, (200, 140, 0)],
+            TWILIGHTCOUNCIL: [3, (215, 155, 0)],
+            ZEALOT: [1, (255, 100, 0)],
+            STALKER: [1, (200, 100, 0)],
+            ARCHON: [1, (255, 255, 200)],
+            HIGHTEMPLAR: [1, (150, 150, 50)],
+            OBSERVER: [1, (150, 150, 50)],
+        }
 
-    #     for unit_type in draw_dict:
-    #         for unit in self.units(unit_type):
-    #             pos = unit.position
-    #             cv2.circle(game_data, (int(pos[0]), int(pos[1])), draw_dict[unit_type][0], draw_dict[unit_type][1], -1)
-    #         for structure in self.structures(unit_type):
-    #             pos = structure.position
-    #             cv2.circle(game_data, (int(pos[0]), int(pos[1])), draw_dict[unit_type][0], draw_dict[unit_type][1], -1)
+        for unit_type in draw_dict:
+            for unit in self.units(unit_type):
+                pos = unit.position
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), draw_dict[unit_type][0], draw_dict[unit_type][1], -1)
+            for structure in self.structures(unit_type):
+                pos = structure.position
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), draw_dict[unit_type][0], draw_dict[unit_type][1], -1)
         
-    #     for townhall in self.townhalls:
-    #         cv2.circle(game_data, (int(townhall.position[0]), int(townhall.position[1])), 4, (0, 255, 0), -1)  # BGR
-    #     #for rax in self.units(BARRACKS):
-    #     #    cv2.circle(game_data, (int(rax.position[0]), int(rax.position[1])), 6, (0, 255, 0), -1)  # BGR
+        for townhall in self.townhalls:
+            cv2.circle(game_data, (int(townhall.position[0]), int(townhall.position[1])), 4, (0, 255, 0), -1)  # BGR
 
-    #     main_base_names = ["nexus", "commandcenter", "hatchery"]
-    #     for enemy_building in self.enemy_structures:
-    #         pos = enemy_building.position
-    #         if enemy_building.name.lower() not in main_base_names:
-    #             cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3, (200, 50, 212), -1)
-    #     for enemy_building in self.enemy_structures:
-    #         pos = enemy_building.position
-    #         if enemy_building.name.lower() in main_base_names:
-    #             cv2.circle(game_data, (int(pos[0]), int(pos[1])), 4, (0, 0, 255), -1)
-    #     for enemy_unit in self.enemy_units:
-    #         pos = enemy_unit.position
-    #         cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1, (0, 0, 200), -1)
+        main_base_names = ["NEXUS", "COMMANDCENTER", "HATCHERY"]
+        for enemy_building in self.enemy_structures:
+            pos = enemy_building.position
+            if enemy_building.name not in main_base_names:
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3, (200, 50, 212), -1)
+        for enemy_building in self.enemy_structures:
+            pos = enemy_building.position
+            if enemy_building.name in main_base_names:
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 4, (0, 0, 255), -1)
+        for enemy_unit in self.enemy_units:
+            pos = enemy_unit.position
+            cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1, (0, 0, 200), -1)
 
-    #     # flip horizontally to make our final fix in visual representation:
-    #     flipped = cv2.flip(game_data, 0)
-    #     resized = cv2.resize(flipped, dsize=None, fx=2, fy=2)
+        # flip horizontally to make our final fix in visual representation:
+        flipped = cv2.flip(game_data, 0)
+        resized = cv2.resize(flipped, dsize=None, fx=2, fy=2)
 
-    #     cv2.imshow('DeckardIntel', resized)
-    #     cv2.waitKey(1)
+        cv2.imshow('Nexus7Intel', resized)
+        cv2.waitKey(1)
 
 
     def on_end(self, result):
@@ -713,14 +715,15 @@ class Nexus7(sc2.BotAI):
 
 def main():
     import glob
-    gls = glob.glob('E:\Battle.net\StarCraft II\Maps\*.SC2Map')
-    available_maps = []
-    for g in gls:
-        map_path = g.split('\\')[-1:][0]
-        map_name = map_path.split('.SC2Map')[0]
-        available_maps.append(map_name)
-    logger.info(f"Available Maps: {available_maps}")
-    map_choice = random.choice(available_maps)
+    # gls = glob.glob('E:\Battle.net\StarCraft II\Maps\*.SC2Map')
+    # available_maps = []
+    # for g in gls:
+    #     map_path = g.split('\\')[-1:][0]
+    #     map_name = map_path.split('.SC2Map')[0]
+    #     available_maps.append(map_name)
+    # logger.info(f"Available Maps: {available_maps}")
+    # map_choice = random.choice(available_maps)
+    map_choice = 'OdysseyLE'
     logger.success(f'Starting Game on Random Map: {map_choice}')
     sc2.run_game(
         sc2.maps.get(f"{map_choice}"),
