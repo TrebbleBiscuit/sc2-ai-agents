@@ -11,17 +11,30 @@ from expand_everywhere import ExpandEverywhere
 
 
 def main():
+    import glob
+    from loguru import logger
+    import random
+    gls = glob.glob('E:\Battle.net\StarCraft II\Maps\*.SC2Map')
+    available_maps = []
+    for g in gls:
+        map_path = g.split('\\')[-1:][0]
+        map_name = map_path.split('.SC2Map')[0]
+        available_maps.append(map_name)
+    logger.info(f"Available Maps: {available_maps}")
+    map_choice = random.choice(available_maps)
+    # map_choice = 'OdysseyLE'
+    logger.success(f'Starting Game on Random Map: {map_choice}')
     sc2.run_game(
-        sc2.maps.get("CatalystLE"),
-        #[Bot(Race.Terran, DeckardBot()), Bot(Race.Protoss, Nexus7())],
+        sc2.maps.get(map_choice),
+        [Bot(Race.Terran, DeckardBot()), Bot(Race.Protoss, Nexus7())],
         #[Bot(Race.Terran, DeckardBot()), Bot(Race.Zerg, androidHunter())],
         #[Bot(Race.Terran, DeckardBot()), Bot(Race.Zerg, SN_10L())],
         #[Bot(Race.Terran, DeckardBot()), Bot(Race.Zerg, ExpandEverywhere())],
         #[Bot(Race.Terran, DeckardBot()), Bot(Race.Terran, Model2E())],
         #[Bot(Race.Terran, Model2E()), Bot(Race.Zerg, androidHunter())],
-        [Bot(Race.Terran, Model2E()), Bot(Race.Protoss, Nexus7())],
+        #[Bot(Race.Terran, Model2E()), Bot(Race.Protoss, Nexus7())],
         #[Bot(Race.Terran, Model2E()), Bot(Race.Terran, Model2E())],
-        realtime=False,
+        realtime=True,
         #save_replay_as="BotReplay.SC2Replay",
     )
 

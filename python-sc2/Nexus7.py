@@ -36,7 +36,7 @@ class Nexus7(sc2.BotAI):
         self.total_worker_supply = self.supply_workers + self.already_pending(UnitTypeId.SCV)
         self.iteration = iteration  # so that we can use this within functions
         if iteration == 0:
-            self._client.game_step = 6  # only step every n frames
+            # self._client.game_step = 2  # only step every n frames
             self.sorted_expo_locations = self.start_location.sort_by_distance(self.expansion_locations_list)
             for w in self.workers:  # split workers
                 w.gather(self.mineral_field.closest_to(w))
@@ -155,7 +155,12 @@ class Nexus7(sc2.BotAI):
             valid_observers.append(obs)
         # valid_observers are not assigned to another control group
         for obs in valid_observers:
-            logger.info(f'valid_observers is {valid_observers}')
+            # make sure valid_observers is of length 1
+            try:
+                assert len(valid_observers) == 1  # debug - observers must be assigned immediately
+            except AssertionError:
+                logger.error('valid_observers should be of length 1')
+                valid_observers = Units(valid_observers[0])
             # if this observer is already in a control group do not reassign it
             try:
                 o1 = self.control_groups['Observer 1']
@@ -165,11 +170,6 @@ class Nexus7(sc2.BotAI):
             # TODO: maybe i should just init a bunch of control groups at the start of the game
             # and not have to worry about all this garbage
             except KeyError:
-                try:
-                    assert len(valid_observers) == 1  # debug - observers must be assigned immediately
-                except AssertionError:
-                    logger.error('valid_observers should be of length 1')
-                    valid_observers = valid_observers.first
                 self.control_groups['Observer 1'] = ControlGroup(valid_observers)
                 logger.success('Assigned Observer to `Observer 1` Control Group')
                 return
@@ -177,11 +177,6 @@ class Nexus7(sc2.BotAI):
                 o2 = self.control_groups['Observer 2']
                 if o2.empty: raise KeyError
             except KeyError:
-                try:
-                    assert len(valid_observers) == 1  # debug - observers must be assigned immediately
-                except AssertionError:
-                    logger.error('valid_observers should be of length 1')
-                    valid_observers = valid_observers.first
                 self.control_groups['Observer 2'] = ControlGroup(valid_observers)
                 logger.success('Assigned Observer to `Observer 2` Control Group')
                 return
@@ -274,9 +269,7 @@ class Nexus7(sc2.BotAI):
         try:
             self.probe_scouted
         except AttributeError:
-            logger.info('Created self.probe_scouted')
             self.probe_scouted = False
-        
         if not self.probe_scouted and self.total_worker_supply == 17:
             logger.success("Probe Scouting Now")
             self.probe_scouted = True
@@ -326,15 +319,15 @@ class Nexus7(sc2.BotAI):
             for nexus in self.townhalls.ready:
                 if nexus.energy >= 50:
                     for tc in filter(utils.is_valid_chrono_target, twilights):
-                        logger.info(f'Chronoing Twilight Council')
+                        # logger.info(f'Chronoing Twilight Council')
                         nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, twilights.first)
                         return
                     for tc in filter(utils.is_valid_chrono_target, cybers):
-                        logger.info(f'Chronoing Cybernetics Core')
+                        # logger.info(f'Chronoing Cybernetics Core')
                         nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, cybers.first)
                         return
                     for tc in filter(utils.is_valid_chrono_target, forges):
-                        logger.info(f'Chronoing Forge')
+                        # logger.info(f'Chronoing Forge')
                         nexus(AbilityId.EFFECT_CHRONOBOOSTENERGYCOST, forges.first)
                         return
 
@@ -355,6 +348,8 @@ class Nexus7(sc2.BotAI):
             for gateway in self.structures(UnitTypeId.GATEWAY).ready.idle:
                 if not self.units.of_type(ZEALOT) and self.can_afford(ZEALOT):
                     gateway.train(ZEALOT)
+                elif not self.units.of_type(STALKER) and self.can_afford(STALKER):
+                    gateway.train(STALKER)
 
         for warpgate in self.structures(UnitTypeId.WARPGATE).ready:
             abilities = await self.get_available_abilities(warpgate)
@@ -425,7 +420,7 @@ class Nexus7(sc2.BotAI):
 
     async def build_assimilators(self):
         if (
-            self.structures(UnitTypeId.GATEWAY) or self.structures(UnitTypeId.WARPGATE)
+            (self.structures(UnitTypeId.GATEWAY) or self.structures(UnitTypeId.WARPGATE))
             and self.already_pending(UnitTypeId.ASSIMILATOR) + self.structures(UnitTypeId.ASSIMILATOR).ready.amount < self.get_ideal_building_count("ASSIMILATOR")
             and self.can_afford(UnitTypeId.ASSIMILATOR)
         ):
@@ -615,14 +610,12 @@ class Nexus7(sc2.BotAI):
         for townhall in self.townhalls:
             cv2.circle(game_data, (int(townhall.position[0]), int(townhall.position[1])), 4, (0, 255, 0), -1)  # BGR
 
-        main_base_names = ["NEXUS", "COMMANDCENTER", "HATCHERY"]
+        main_base_names = ["Nexus", "CommandCenter", "Hatchery"]
         for enemy_building in self.enemy_structures:
             pos = enemy_building.position
             if enemy_building.name not in main_base_names:
                 cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3, (200, 50, 212), -1)
-        for enemy_building in self.enemy_structures:
-            pos = enemy_building.position
-            if enemy_building.name in main_base_names:
+            else:
                 cv2.circle(game_data, (int(pos[0]), int(pos[1])), 4, (0, 0, 255), -1)
         for enemy_unit in self.enemy_units:
             pos = enemy_unit.position
@@ -654,7 +647,9 @@ class Nexus7(sc2.BotAI):
             else: return 6
         elif building == "GATEWAY":
             if self.townhalls.ready.amount == 1: return 1
-            elif self.townhalls.ready.amount == 2: return 3
+            elif self.townhalls.ready.amount == 2:
+                if self.time < 200: return 2
+                else: return 3
             elif th == 3: return 5
             elif th == 4: return 7
             elif th == 5: return 10
@@ -664,7 +659,7 @@ class Nexus7(sc2.BotAI):
             if th >= 3 and self.townhalls.ready.amount >= 3: return 2
             # else: return 0
         elif building == "ASSIMILATOR":
-            if th < 2: return th
+            if th < 2: return 1
             elif th == 2 and self.townhalls.ready.amount == 2: return 3
             elif th == 2: return 2
             elif self.minerals > 1000 and self.vespene < 400: return th*2
@@ -715,15 +710,15 @@ class Nexus7(sc2.BotAI):
 
 def main():
     import glob
-    # gls = glob.glob('E:\Battle.net\StarCraft II\Maps\*.SC2Map')
-    # available_maps = []
-    # for g in gls:
-    #     map_path = g.split('\\')[-1:][0]
-    #     map_name = map_path.split('.SC2Map')[0]
-    #     available_maps.append(map_name)
-    # logger.info(f"Available Maps: {available_maps}")
-    # map_choice = random.choice(available_maps)
-    map_choice = 'OdysseyLE'
+    gls = glob.glob('E:\Battle.net\StarCraft II\Maps\*.SC2Map')
+    available_maps = []
+    for g in gls:
+        map_path = g.split('\\')[-1:][0]
+        map_name = map_path.split('.SC2Map')[0]
+        available_maps.append(map_name)
+    logger.info(f"Available Maps: {available_maps}")
+    map_choice = random.choice(available_maps)
+    # map_choice = 'OdysseyLE'
     logger.success(f'Starting Game on Random Map: {map_choice}')
     sc2.run_game(
         sc2.maps.get(f"{map_choice}"),
