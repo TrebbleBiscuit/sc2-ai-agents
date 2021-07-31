@@ -1,4 +1,7 @@
+from loguru import logger
+
 from sc2.data import Race
+from sc2.constants import *
 from sc2.ids.unit_typeid import *
 from sc2.ids.ability_id import *
 from sc2.unit import Unit
@@ -210,7 +213,7 @@ def process_scouting(bot):
             })
 
     # get opponent army supply (scouted / visible)
-    scout_timeout_duration =  90 # TODO: set the time on how long until the scouted army supply times out
+    scout_timeout_duration =  300 # TODO: set the time on how long until the scouted army supply times out
     bot.opponent_data["army_supply_scouted"] = sum(x["supply"] for x in bot.opponent_data["army_tags_scouted"] if x["scout_time"] > bot.time - scout_timeout_duration)
     bot.opponent_data["army_supply_nearby"] = sum(x["supply"] for x in bot.opponent_data["army_tags_scouted"] if x["scout_time"] > bot.time - scout_timeout_duration and x["distance_to_base"] < 60)
     bot.opponent_data["army_supply_visible"] = sum(get_unit_info(bot, x) or 0 for x in visible_enemy_units)
@@ -224,5 +227,11 @@ def process_scouting(bot):
             if th.tag not in bot.opponent_data["expansions_tags"]:
                 bot.opponent_data["expansions_tags"].add(th.tag)
                 bot.opponent_data["expansions"].append(th.position.to2)
-                print("found a new enemy base!")
-                print(bot.opponent_data["expansions"])
+                logger.success(f"Found New Enemy Townhall at {th.position.to2}")
+
+def is_valid_chrono_target(unit: Unit):
+    # do not chrono idle buildings or buildings that already have chrono
+    if unit.is_idle or unit.has_buff(BuffId.CHRONOBOOSTENERGYCOST):  # what a terrible ID for this
+        return False
+    else:  # just to make it clear
+        return True
