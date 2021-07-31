@@ -162,7 +162,11 @@ class Nexus7(sc2.BotAI):
             # TODO: maybe i should just init a bunch of control groups at the start of the game
             # and not have to worry about all this garbage
             except KeyError:
-                assert len(valid_observers) == 1  # debug - observers must be assigned immediately
+                try:
+                    assert len(valid_observers) == 1  # debug - observers must be assigned immediately
+                except AssertionError:
+                    logger.error('valid_observers should be of length 1')
+                    valid_observers = valid_observers.first
                 self.control_groups['Observer 1'] = ControlGroup(valid_observers)
                 logger.success('Assigned Observer to `Observer 1` Control Group')
                 return
@@ -170,7 +174,11 @@ class Nexus7(sc2.BotAI):
                 o2 = self.control_groups['Observer 2']
                 if o2.empty: raise KeyError
             except KeyError:
-                assert len(valid_observers) == 1  # debug - observers must be assigned immediately
+                try:
+                    assert len(valid_observers) == 1  # debug - observers must be assigned immediately
+                except AssertionError:
+                    logger.error('valid_observers should be of length 1')
+                    valid_observers = valid_observers.first
                 self.control_groups['Observer 2'] = ControlGroup(valid_observers)
                 logger.success('Assigned Observer to `Observer 2` Control Group')
                 return
